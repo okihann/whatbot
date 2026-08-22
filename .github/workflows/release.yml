@@ -71,12 +71,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Deliberately identical to the known-good original workflow.
-          # Do not add cross-target pkg builds or source-build fallbacks here.
           pkg index.js --target node18-linux-x64 --output shazam-cli
           test -s shazam-cli
 
-      # No strip step: it can corrupt pkg binaries.
+      - name: Smoke test Shazam CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$(./shazam-cli /definitely/missing/file.mp3)"
+          echo "$output"
+          grep -F 'File not found' <<< "$output"
+
       - name: Publish Shazam Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -193,6 +198,30 @@ jobs:
           else
             go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$output" .
           fi
+
+      - name: Smoke test embedded tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.goos }}/${{ matrix.goarch }}" in
+            linux/amd64)
+              echo 'Testing native embedded binaries...'
+              utils/bin/ffmpeg -version | head -n1
+              utils/bin/ffprobe -version | head -n1
+              utils/bin/yt-dlp --version
+              utils/bin/shazam-cli /definitely/missing/file.mp3 | grep -F 'File not found'
+              ;;
+            *)
+              echo 'Cross-architecture build: verify embedded files are present; native execution is tested by the matching release target.'
+              ;;
+          esac
+
+      - name: Smoke test Whatbot binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "dist/whatbot-${{ matrix.name }}${{ matrix.ext }}"
+          file "dist/whatbot-${{ matrix.name }}${{ matrix.ext }}"
 
       - name: Package
         shell: bash
