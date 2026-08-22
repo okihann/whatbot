@@ -1,0 +1,124 @@
+name: Build and Release Shazam CLI
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Shazam CLI
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: linux-amd64, target: node24-linux-x64, ext: ''}
+          - {name: linux-arm64, target: node24-linux-arm64, ext: ''}
+          - {name: macos-amd64, target: node24-macos-x64, ext: ''}
+          - {name: macos-arm64, target: node24-macos-arm64, ext: ''}
+          - {name: windows-amd64, target: node24-win-x64, ext: '.exe'}
+          - {name: windows-arm64, target: node24-win-arm64, ext: '.exe'}
+
+    steps:
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Initialize project
+        run: npm init -y
+
+      - name: Install Shazam library
+        run: npm install --save-exact node-shazam@latest
+
+      - name: Install pkg
+        run: npm install --global @yao-pkg/pkg@6.22.0
+
+      - name: Generate bridge code
+        run: |
+          cat > index.js <<'EOF'
+          const { Shazam } = require('node-shazam');
+          const fs = require('fs');
+          const shazam = new Shazam();
+
+          async function run() {
+              const audioFile = process.argv[2];
+              if (!audioFile || !fs.existsSync(audioFile)) {
+                  console.log(JSON.stringify({success: false, error: 'File not found'}));
+                  process.exitCode = 1;
+                  return;
+              }
+              try {
+                  const result = await shazam.recognise(audioFile);
+                  if (result && result.track) {
+                      console.log(JSON.stringify({
+                          success: true,
+                          title: result.track.title,
+                          artist: result.track.subtitle,
+                          url: result.track.url
+                      }));
+                  } else {
+                      console.log(JSON.stringify({success: false, error: 'No match found'}));
+                  }
+              } catch (e) {
+                  console.log(JSON.stringify({success: false, error: e?.message || String(e)}));
+                  process.exitCode = 1;
+              }
+          }
+
+          run();
+          EOF
+
+      - name: Build standalone binary
+        run: |
+          mkdir -p dist
+          pkg --target '${{ matrix.target }}' --output 'dist/shazam-cli-${{ matrix.name }}${{ matrix.ext }}' --compress Brotli index.js
+
+      - name: Smoke-test Linux amd64 build
+        if: matrix.name == 'linux-amd64'
+        run: |
+          ./dist/shazam-cli-linux-amd64 /definitely/missing/file.mp3 | grep -F 'File not found'
+
+      - name: Generate checksum
+        run: sha256sum 'dist/shazam-cli-${{ matrix.name }}${{ matrix.ext }}' > 'dist/shazam-cli-${{ matrix.name }}.sha256'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shazam-cli-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish Shazam CLI release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: shazam-cli-*
+          merge-multiple: true
+
+      - name: Generate combined checksums
+        working-directory: dist
+        run: cat *.sha256 > SHA256SUMS
+
+      - name: Publish floating Shazam CLI release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: shazam-cli-latest
+          name: Latest Shazam CLI
+          prerelease: false
+          make_latest: false
+          generate_release_notes: false
+          overwrite_files: true
+          files: |
+            dist/shazam-cli-*
+            dist/SHA256SUMS
