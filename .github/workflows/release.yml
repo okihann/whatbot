@@ -13,20 +13,102 @@ env:
   GO_VERSION: '1.26.x'
   OBFUSCATE: 'true'
   YTDLP_VERSION: '2026.06.09'
-  PKG_VERSION: '6.22.0'
 
 jobs:
+  shazam:
+    name: Build Shazam CLI (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: linux-amd64, runner: ubuntu-latest, target: node22-linux-x64}
+          - {name: linux-arm64, runner: ubuntu-24.04-arm, target: node22-linux-arm64}
+          - {name: windows-amd64, runner: windows-latest, target: node22-win-x64}
+          - {name: windows-arm64, runner: windows-11-arm, target: node22-win-arm64}
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Create Shazam CLI project
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p shazam-cli
+          cd shazam-cli
+          npm init -y
+          npm install --save-exact node-shazam@latest
+          cat > index.js <<'EOF'
+          const { Shazam } = require('node-shazam');
+          const fs = require('fs');
+          const shazam = new Shazam();
+
+          async function run() {
+            const audioFile = process.argv[2];
+            if (!audioFile || !fs.existsSync(audioFile)) {
+              console.log(JSON.stringify({success:false,error:'File not found'}));
+              process.exitCode = 1;
+              return;
+            }
+            try {
+              const result = await shazam.recognise(audioFile);
+              if (result && result.track) {
+                console.log(JSON.stringify({
+                  success:true,
+                  title:result.track.title,
+                  artist:result.track.subtitle,
+                  url:result.track.url
+                }));
+              } else {
+                console.log(JSON.stringify({success:false,error:'No match found'}));
+              }
+            } catch (e) {
+              console.log(JSON.stringify({success:false,error:e?.message || String(e)}));
+              process.exitCode = 1;
+            }
+          }
+
+          run();
+          EOF
+
+      - name: Build native Shazam binary
+        id: pkg
+        uses: yao-pkg/pkg-action@v1
+        with:
+          targets: ${{ matrix.target }}
+          compress: none
+          checksum: sha256
+          config-inline: |
+            {
+              "bin": "index.js",
+              "compress": "Brotli",
+              "noBytecode": true,
+              "publicPackages": "*"
+            }
+
+      - name: Upload Shazam binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: shazam-cli-${{ matrix.name }}
+          path: ${{ join(fromJson(steps.pkg.outputs.binaries), '\n') }}
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.name }}
+    needs: shazam
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {name: linux-amd64, goos: linux, goarch: amd64, ffmpeg_asset: ffmpeg-master-latest-linux64-gpl.tar.xz, ytdlp_asset: yt-dlp_linux, shazam_target: node18-linux-x64, ext: ''}
-          - {name: linux-arm64, goos: linux, goarch: arm64, ffmpeg_asset: ffmpeg-master-latest-linuxarm64-lgpl-shared.tar.xz, ytdlp_asset: yt-dlp_linux_aarch64, shazam_target: node18-linux-arm64, ext: ''}
-          - {name: windows-amd64, goos: windows, goarch: amd64, ffmpeg_asset: ffmpeg-master-latest-win64-gpl.zip, ytdlp_asset: yt-dlp.exe, shazam_target: node18-win-x64, ext: '.exe'}
-          - {name: windows-arm64, goos: windows, goarch: arm64, ffmpeg_asset: ffmpeg-master-latest-winarm64-gpl.zip, ytdlp_asset: yt-dlp.exe, shazam_target: node18-win-arm64, ext: '.exe'}
+          - {name: linux-amd64, goos: linux, goarch: amd64, ffmpeg_asset: ffmpeg-master-latest-linux64-gpl.tar.xz, ytdlp_asset: yt-dlp_linux, shazam_artifact: shazam-cli-linux-amd64, ext: ''}
+          - {name: linux-arm64, goos: linux, goarch: arm64, ffmpeg_asset: ffmpeg-master-latest-linuxarm64-lgpl-shared.tar.xz, ytdlp_asset: yt-dlp_linux_aarch64, shazam_artifact: shazam-cli-linux-arm64, ext: ''}
+          - {name: windows-amd64, goos: windows, goarch: amd64, ffmpeg_asset: ffmpeg-master-latest-win64-gpl.zip, ytdlp_asset: yt-dlp.exe, shazam_artifact: shazam-cli-windows-amd64, ext: '.exe'}
+          - {name: windows-arm64, goos: windows, goarch: arm64, ffmpeg_asset: ffmpeg-master-latest-winarm64-gpl.zip, ytdlp_asset: yt-dlp.exe, shazam_artifact: shazam-cli-windows-arm64, ext: '.exe'}
 
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +124,21 @@ jobs:
           set -euo pipefail
           rm -rf utils/bin
           mkdir -p utils/bin
+
+      - name: Download native Shazam CLI
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ matrix.shazam_artifact }}
+          path: utils/bin
+
+      - name: Normalize Shazam CLI name
+        shell: bash
+        run: |
+          set -euo pipefail
+          shazam_path="$(find utils/bin -maxdepth 1 -type f | head -n1)"
+          test -n "$shazam_path"
+          mv "$shazam_path" utils/bin/shazam-cli
+          chmod +x utils/bin/shazam-cli || true
 
       - name: Download FFmpeg and FFprobe
         shell: bash
@@ -77,45 +174,15 @@ jobs:
           curl -fL --retry 3 "$url" -o utils/bin/yt-dlp
           chmod +x utils/bin/yt-dlp || true
 
-      - name: Build Shazam CLI for this target
+      - name: Verify embedded dependencies
         shell: bash
         run: |
           set -euo pipefail
-          work=/tmp/shazam-cli
-          rm -rf "$work"
-          mkdir -p "$work"
-          cd "$work"
-          npm init -y >/dev/null
-          npm install --save-exact node-shazam@latest
-          npm install --global "@yao-pkg/pkg@${PKG_VERSION}"
-          cat > index.js <<'EOF'
-          const { Shazam } = require('node-shazam');
-          const fs = require('fs');
-          const shazam = new Shazam();
-          async function run() {
-            const audioFile = process.argv[2];
-            if (!audioFile || !fs.existsSync(audioFile)) {
-              console.log(JSON.stringify({success:false,error:'File not found'}));
-              process.exitCode = 1;
-              return;
-            }
-            try {
-              const result = await shazam.recognise(audioFile);
-              if (result && result.track) {
-                console.log(JSON.stringify({success:true,title:result.track.title,artist:result.track.subtitle,url:result.track.url}));
-              } else {
-                console.log(JSON.stringify({success:false,error:'No match found'}));
-              }
-            } catch (e) {
-              console.log(JSON.stringify({success:false,error:e?.message || String(e)}));
-              process.exitCode = 1;
-            }
-          }
-          run();
-          EOF
-          pkg --target '${{ matrix.shazam_target }}' --output /tmp/shazam-cli${{ matrix.ext }} index.js
-          cp /tmp/shazam-cli${{ matrix.ext }} "$GITHUB_WORKSPACE/utils/bin/shazam-cli"
-          chmod +x "$GITHUB_WORKSPACE/utils/bin/shazam-cli" || true
+          ls -lh utils/bin
+          test -s utils/bin/ffmpeg
+          test -s utils/bin/ffprobe
+          test -s utils/bin/yt-dlp
+          test -s utils/bin/shazam-cli
 
       - name: Resolve Go dependencies
         run: go mod tidy
@@ -159,7 +226,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
           pattern: whatbot-*
