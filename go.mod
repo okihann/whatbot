@@ -1,6 +1,8 @@
 module bot
 
-go 1.25.0
+go 1.26.0
+
+toolchain go1.26.0
 
 require (
 	github.com/google/uuid v1.6.0
@@ -20,7 +22,7 @@ require (
 	github.com/elliotchance/orderedmap/v3 v3.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
-	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/ncruces/go-strftime v0.0.0-20250514134852-2b5b1c9f2a7a // indirect
 	github.com/petermattis/goid v0.0.0-20260330135022-df67b199bc81 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/zerolog v1.35.1 // indirect
