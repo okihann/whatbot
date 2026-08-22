@@ -13,7 +13,6 @@ env:
   GO_VERSION: '1.26.x'
   OBFUSCATE: 'true'
   YTDLP_VERSION: '2026.06.09'
-  SHAZAM_NODE_VERSION: '18.20.8'
 
 jobs:
   shazam:
@@ -64,22 +63,12 @@ jobs:
           run();
           EOF
 
-      - name: Verify pkg has the prebuilt Node base binary
-        shell: bash
-        run: |
-          set -euo pipefail
-          cache_dir="${PKG_CACHE_PATH:-$HOME/.pkg-cache}"
-          mkdir -p "$cache_dir"
-          # pkg 6.22.0 uses Node 18.20.8 for node18-linux-x64.
-          # Fail fast instead of falling back to compiling Node from source.
-          url="https://github.com/yao-pkg/pkg-fetch/releases/download/v3.6/node-v${SHAZAM_NODE_VERSION}-linux-x64"
-          echo "Checking $url"
-          curl -fsSI "$url" >/dev/null
-
       - name: Compile standalone Linux amd64 Shazam CLI
         shell: bash
         run: |
           set -euo pipefail
+          # Do not use --build: pkg should fetch its prebuilt Node runtime.
+          # If pkg cannot fetch it, its own error is surfaced immediately by the 5-minute job timeout.
           pkg index.js --target node18-linux-x64 --output shazam-cli
           test -s shazam-cli
 
