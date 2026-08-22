@@ -11,18 +11,14 @@ import (
 	ngrokgo "golang.ngrok.com/ngrok/v2"
 )
 
-// Tunnel owns the ngrok agent and endpoint so the tunnel can be explicitly
-// started and stopped by the application lifecycle.
 type Tunnel struct {
-	mu       sync.Mutex
-	agent    ngrokgo.Agent
-	forward  ngrokgo.EndpointForwarder
-	ctx      context.Context
-	cancel   context.CancelFunc
+	mu      sync.Mutex
+	agent   ngrokgo.Agent
+	forward ngrokgo.EndpointForwarder
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
-// Config is deliberately small and environment-driven so tunnel behavior is
-// visible and auditable in .env rather than hidden in the binary.
 type Config struct {
 	Enabled   bool
 	Domain    string
@@ -49,13 +45,9 @@ func parseBool(value string) bool {
 }
 
 func normalizePort(port string) string {
-	port = strings.TrimSpace(port)
-	return strings.TrimPrefix(port, ":")
+	return strings.TrimPrefix(strings.TrimSpace(port), ":")
 }
 
-// Start creates an ngrok endpoint only when explicitly enabled. It forwards
-// to the bot's local HTTP server and never downloads or launches an ngrok
-// executable.
 func (t *Tunnel) Start(cfg Config) error {
 	if !cfg.Enabled {
 		log.Println("🔒 [NGROK] Disabled (NGROK_ENABLED=false).")
@@ -105,11 +97,10 @@ func (t *Tunnel) Start(cfg Config) error {
 
 	t.agent = agent
 	t.forward = forward
-	log.Printf("🌐 [NGROK] Enabled: https://%s -> http://127.0.0.1:%s\n", cfg.Domain, cfg.Port)
+	log.Printf("🌐 [NGROK] Enabled: %s -> http://127.0.0.1:%s\n", cfg.Domain, cfg.Port)
 	return nil
 }
 
-// Stop explicitly closes the endpoint and disconnects the agent.
 func (t *Tunnel) Stop() error {
 	t.mu.Lock()
 	forward := t.forward
