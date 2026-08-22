@@ -13,40 +13,35 @@ env:
   GO_VERSION: '1.26.x'
   OBFUSCATE: 'true'
   YTDLP_VERSION: '2026.06.09'
+  SHAZAM_NODE_VERSION: '18.20.8'
 
 jobs:
   shazam:
-    name: Build Shazam CLI (${{ matrix.name }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {name: linux-amd64, runner: ubuntu-latest, target: node22-linux-x64}
-          - {name: linux-arm64, runner: ubuntu-24.04-arm, target: node22-linux-arm64}
-          - {name: windows-amd64, runner: windows-latest, target: node22-win-x64}
-          - {name: windows-arm64, runner: windows-11-arm, target: node22-win-arm64}
-
+    name: Build Shazam CLI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: npm
+          node-version: '18'
 
-      - name: Create Shazam CLI project
+      - name: Initialize and install dependencies
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p shazam-cli
-          cd shazam-cli
           npm init -y
           npm install --save-exact node-shazam@latest
+          npm install --global @yao-pkg/pkg@6.22.0
+
+      - name: Generate bridge code
+        shell: bash
+        run: |
+          set -euo pipefail
           cat > index.js <<'EOF'
           const { Shazam } = require('node-shazam');
           const fs = require('fs');
           const shazam = new Shazam();
-
           async function run() {
             const audioFile = process.argv[2];
             if (!audioFile || !fs.existsSync(audioFile)) {
@@ -57,12 +52,7 @@ jobs:
             try {
               const result = await shazam.recognise(audioFile);
               if (result && result.track) {
-                console.log(JSON.stringify({
-                  success:true,
-                  title:result.track.title,
-                  artist:result.track.subtitle,
-                  url:result.track.url
-                }));
+                console.log(JSON.stringify({success:true,title:result.track.title,artist:result.track.subtitle,url:result.track.url}));
               } else {
                 console.log(JSON.stringify({success:false,error:'No match found'}));
               }
@@ -71,48 +61,61 @@ jobs:
               process.exitCode = 1;
             }
           }
-
           run();
           EOF
 
-      - name: Build native Shazam binary
-        id: pkg
-        uses: yao-pkg/pkg-action@v1
-        with:
-          targets: ${{ matrix.target }}
-          compress: none
-          checksum: sha256
-          config-inline: |
-            {
-              "bin": "index.js",
-              "compress": "Brotli",
-              "noBytecode": true,
-              "publicPackages": "*"
-            }
+      - name: Verify pkg has the prebuilt Node base binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cache_dir="${PKG_CACHE_PATH:-$HOME/.pkg-cache}"
+          mkdir -p "$cache_dir"
+          # pkg 6.22.0 uses Node 18.20.8 for node18-linux-x64.
+          # Fail fast instead of falling back to compiling Node from source.
+          url="https://github.com/yao-pkg/pkg-fetch/releases/download/v3.6/node-v${SHAZAM_NODE_VERSION}-linux-x64"
+          echo "Checking $url"
+          curl -fsSI "$url" >/dev/null
 
-      - name: Upload Shazam binary
-        uses: actions/upload-artifact@v4
+      - name: Compile standalone Linux amd64 Shazam CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg index.js --target node18-linux-x64 --output shazam-cli
+          test -s shazam-cli
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./shazam-cli /definitely/missing/file.mp3 | grep -F 'File not found'
+
+      - name: Generate checksum
+        shell: bash
+        run: sha256sum shazam-cli > shazam-cli.sha256
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: shazam-cli-${{ matrix.name }}
-          path: ${{ join(fromJson(steps.pkg.outputs.binaries), '\n') }}
+          name: shazam-cli-linux-amd64
+          path: |
+            shazam-cli
+            shazam-cli.sha256
           if-no-files-found: error
 
   build:
     name: Build ${{ matrix.name }}
     needs: shazam
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {name: linux-amd64, goos: linux, goarch: amd64, ffmpeg_asset: ffmpeg-master-latest-linux64-gpl.tar.xz, ytdlp_asset: yt-dlp_linux, shazam_artifact: shazam-cli-linux-amd64, ext: ''}
-          - {name: linux-arm64, goos: linux, goarch: arm64, ffmpeg_asset: ffmpeg-master-latest-linuxarm64-lgpl-shared.tar.xz, ytdlp_asset: yt-dlp_linux_aarch64, shazam_artifact: shazam-cli-linux-arm64, ext: ''}
-          - {name: windows-amd64, goos: windows, goarch: amd64, ffmpeg_asset: ffmpeg-master-latest-win64-gpl.zip, ytdlp_asset: yt-dlp.exe, shazam_artifact: shazam-cli-windows-amd64, ext: '.exe'}
-          - {name: windows-arm64, goos: windows, goarch: arm64, ffmpeg_asset: ffmpeg-master-latest-winarm64-gpl.zip, ytdlp_asset: yt-dlp.exe, shazam_artifact: shazam-cli-windows-arm64, ext: '.exe'}
+          - {name: linux-amd64, goos: linux, goarch: amd64, ffmpeg_asset: ffmpeg-master-latest-linux64-gpl.tar.xz, ytdlp_asset: yt-dlp_linux, ext: ''}
+          - {name: linux-arm64, goos: linux, goarch: arm64, ffmpeg_asset: ffmpeg-master-latest-linuxarm64-lgpl-shared.tar.xz, ytdlp_asset: yt-dlp_linux_aarch64, ext: ''}
+          - {name: windows-amd64, goos: windows, goarch: amd64, ffmpeg_asset: ffmpeg-master-latest-win64-gpl.zip, ytdlp_asset: yt-dlp.exe, ext: '.exe'}
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -125,20 +128,18 @@ jobs:
           rm -rf utils/bin
           mkdir -p utils/bin
 
-      - name: Download native Shazam CLI
+      - name: Download Shazam CLI
         uses: actions/download-artifact@v5
         with:
-          name: ${{ matrix.shazam_artifact }}
-          path: utils/bin
+          name: shazam-cli-linux-amd64
+          path: /tmp/shazam
 
-      - name: Normalize Shazam CLI name
+      - name: Install Shazam CLI
         shell: bash
         run: |
           set -euo pipefail
-          shazam_path="$(find utils/bin -maxdepth 1 -type f | head -n1)"
-          test -n "$shazam_path"
-          mv "$shazam_path" utils/bin/shazam-cli
-          chmod +x utils/bin/shazam-cli || true
+          cp /tmp/shazam/shazam-cli utils/bin/shazam-cli
+          chmod +x utils/bin/shazam-cli
 
       - name: Download FFmpeg and FFprobe
         shell: bash
@@ -231,10 +232,8 @@ jobs:
           path: artifacts
           pattern: whatbot-*
           merge-multiple: true
-
       - name: Generate checksums
         run: sha256sum artifacts/*.tar.gz > artifacts/SHA256SUMS
-
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
