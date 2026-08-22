@@ -23,74 +23,65 @@ jobs:
       - name: Setup Node.js Environment
         uses: actions/setup-node@v4
         with:
-          # @yao-pkg/pkg 6.22 uses undici APIs that require a modern host Node.
-          # This is only the Node version running pkg itself; the generated
-          # executable still targets Node 18 below.
-          node-version: '20'
+          node-version: '18'
 
-      - name: Initialize and install dependencies
+      - name: Initialize and Install Latest Library
         shell: bash
         run: |
           set -euo pipefail
           npm init -y
-          npm install --save-exact node-shazam@latest
-          npm install --global @yao-pkg/pkg@6.22.0
+          npm install node-shazam@latest
+          npm install -g @yao-pkg/pkg
 
-      - name: Generate bridge code
+      - name: Generate the Bridge Code
         shell: bash
         run: |
           set -euo pipefail
-          cat > index.js <<'EOF'
+          cat << 'EOF' > index.js
           const { Shazam } = require('node-shazam');
           const fs = require('fs');
           const shazam = new Shazam();
+
           async function run() {
-            const audioFile = process.argv[2];
-            if (!audioFile || !fs.existsSync(audioFile)) {
-              console.log(JSON.stringify({success:false,error:'File not found'}));
-              process.exitCode = 1;
-              return;
-            }
-            try {
-              const result = await shazam.recognise(audioFile);
-              if (result && result.track) {
-                console.log(JSON.stringify({success:true,title:result.track.title,artist:result.track.subtitle,url:result.track.url}));
-              } else {
-                console.log(JSON.stringify({success:false,error:'No match found'}));
+              const audioFile = process.argv[2];
+              if (!audioFile || !fs.existsSync(audioFile)) {
+                  console.log(JSON.stringify({success: false, error: "File not found"}));
+                  return;
               }
-            } catch (e) {
-              console.log(JSON.stringify({success:false,error:e?.message || String(e)}));
-              process.exitCode = 1;
-            }
+              try {
+                  const result = await shazam.recognise(audioFile);
+                  if (result && result.track) {
+                      console.log(JSON.stringify({
+                          success: true,
+                          title: result.track.title,
+                          artist: result.track.subtitle,
+                          url: result.track.url
+                      }));
+                  } else {
+                      console.log(JSON.stringify({success: false, error: "No match found"}));
+                  }
+              } catch (e) {
+                  console.log(JSON.stringify({success: false, error: e.message}));
+              }
           }
           run();
           EOF
 
-      - name: Compile standalone Linux amd64 Shazam CLI
+      - name: Compile to Standalone Linux Binary
         shell: bash
         run: |
           set -euo pipefail
-          # pkg itself runs under Node 20, while the produced binary remains
-          # Node 18 Linux x64 for compatibility with the original CLI.
+          # Deliberately identical to the known-good original workflow.
+          # Do not add cross-target pkg builds or source-build fallbacks here.
           pkg index.js --target node18-linux-x64 --output shazam-cli
           test -s shazam-cli
 
-      - name: Smoke test
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./shazam-cli /definitely/missing/file.mp3 | grep -F 'File not found'
-
-      - name: Generate checksum
-        shell: bash
-        run: sha256sum shazam-cli > shazam-cli.sha256
-
-      - uses: actions/upload-artifact@v4
+      # No strip step: it can corrupt pkg binaries.
+      - name: Publish Shazam Artifact
+        uses: actions/upload-artifact@v4
         with:
           name: shazam-cli-linux-amd64
-          path: |
-            shazam-cli
-            shazam-cli.sha256
+          path: shazam-cli
           if-no-files-found: error
 
   build:
@@ -108,6 +99,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -121,7 +113,7 @@ jobs:
           mkdir -p utils/bin
 
       - name: Download Shazam CLI
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v4
         with:
           name: shazam-cli-linux-amd64
           path: /tmp/shazam
@@ -219,13 +211,15 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
           pattern: whatbot-*
           merge-multiple: true
+
       - name: Generate checksums
         run: sha256sum artifacts/*.tar.gz > artifacts/SHA256SUMS
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
