@@ -7,6 +7,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/mdp/qrterminal/v3 v3.2.1
 	go.mau.fi/whatsmeow v0.0.0-20260421083005-5b8886176ff7
+	golang.ngrok.com/ngrok/v2 v2.2.0
 	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.47.0
 )

@@ -13,8 +13,9 @@ import (
 	"syscall"
 	"time"
 
+	"bot/ai"
 	"bot/handlers"
-   	"bot/ai"
+	"bot/ngrok"
 	_ "bot/commands/owner"
 	_ "bot/commands/tool"
 
@@ -29,35 +30,31 @@ import (
 )
 
 var (
-	// Store all active clients dynamically instead of a single global variable
 	activeClients = make(map[string]*whatsmeow.Client)
 	clientsMu     sync.Mutex
 	dbContainer   *sqlstore.Container
 	botStartTime  time.Time
+	publicTunnel  = &ngrok.Tunnel{}
+	ngrokConfig   ngrok.Config
 )
 
-// setupClient initializes the connection and event handlers for a specific device
 func setupClient(deviceStore *store.Device) {
 	clientLog := waLog.Stdout("Client", "INFO", true)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
 
-	// Attach the event handler directly to THIS specific client
 	client.AddEventHandler(func(evt interface{}) {
 		switch v := evt.(type) {
 		case *events.Connected:
 			fmt.Printf("\n✅ Bot %s is live and connected!\n", client.Store.ID)
 		case *events.Message:
-			// Ignore old messages from before the bot booted up
 			if v.Info.Timestamp.Before(botStartTime) {
 				return
 			}
-			// Route the message to the handler, passing this specific client
 			handlers.HandleCommand(client, v)
 		}
 	})
 
 	if client.Store.ID == nil {
-		// --- NEW DEVICE PAIRING FLOW ---
 		qrChan, _ := client.GetQRChannel(context.Background())
 		err := client.Connect()
 		if err != nil {
@@ -66,11 +63,7 @@ func setupClient(deviceStore *store.Device) {
 		}
 		for evt := range qrChan {
 			if evt.Event == "code" {
-				config := qrterminal.Config{
-					Level:      qrterminal.L,
-					Writer:     os.Stdout,
-					HalfBlocks: true,
-				}
+				config := qrterminal.Config{Level: qrterminal.L, Writer: os.Stdout, HalfBlocks: true}
 				fmt.Println("\n=================================================")
 				fmt.Println("Scan this QR code to link a new WhatsApp account:")
 				fmt.Println("=================================================")
@@ -80,7 +73,6 @@ func setupClient(deviceStore *store.Device) {
 			}
 		}
 	} else {
-		// --- EXISTING DEVICE RECONNECTION FLOW ---
 		err := client.Connect()
 		if err != nil {
 			fmt.Println("Failed to connect existing device:", err)
@@ -88,7 +80,6 @@ func setupClient(deviceStore *store.Device) {
 		}
 	}
 
-	// Add the successfully connected client to our global manager
 	clientsMu.Lock()
 	if client.Store.ID != nil {
 		activeClients[client.Store.ID.String()] = client
@@ -96,12 +87,28 @@ func setupClient(deviceStore *store.Device) {
 	clientsMu.Unlock()
 }
 
+func startNgrok() {
+	if err := publicTunnel.Start(ngrokConfig); err != nil {
+		fmt.Printf("⚠️ [NGROK] %v\n", err)
+	}
+}
+
+func stopNgrok() {
+	if err := publicTunnel.Stop(); err != nil {
+		fmt.Printf("⚠️ [NGROK] Shutdown error: %v\n", err)
+	}
+}
+
 func main() {
-    ai.LoadEnv()
+	ai.LoadEnv()
+	ngrokConfig = ngrok.LoadConfig(ai.AppConfig.ServerPort)
 	go ai.StartServer()
-	
-    botStartTime = time.Now()
+
+	botStartTime = time.Now()
 	handlers.SetStartTime(botStartTime)
+
+	// NGROK_ENABLED controls startup. Credentials remain environment-only.
+	startNgrok()
 
 	dbLog := waLog.Stdout("Database", "INFO", true)
 	dbPath := "db"
@@ -125,7 +132,6 @@ func main() {
 		panic(fmt.Sprintf("FATAL: Failed to upgrade database schema: %v", err))
 	}
 
-	// Fetch ALL devices from the database, not just the first one
 	devices, err := dbContainer.GetAllDevices(context.Background())
 	if err != nil {
 		panic(err)
@@ -144,18 +150,21 @@ func main() {
 	fmt.Println("\n==============================================================")
 	fmt.Println("Multi-Device Manager is Running. Press CTRL+C to exit.")
 	fmt.Println("Commands you can type in this console:")
-	fmt.Println(" - 'add'  : Generate a new QR code to link another phone number")
-	fmt.Println(" - 'list' : Show all currently connected bot numbers")
+	fmt.Println(" - 'add'       : Generate a new QR code")
+	fmt.Println(" - 'list'      : Show connected bot numbers")
+	fmt.Println(" - 'ngrok on'  : Start the configured ngrok tunnel")
+	fmt.Println(" - 'ngrok off' : Stop the ngrok tunnel")
+	fmt.Println(" - 'ngrok'     : Show current ngrok status")
 	fmt.Println("==============================================================")
 
-	// --- TERMINAL COMMAND LISTENER ---
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
 		for scanner.Scan() {
-			text := strings.TrimSpace(scanner.Text())
-			if text == "add" {
+			text := strings.ToLower(strings.TrimSpace(scanner.Text()))
+			switch text {
+			case "add":
 				setupClient(dbContainer.NewDevice())
-			} else if text == "list" {
+			case "list":
 				clientsMu.Lock()
 				fmt.Printf("\n--- Active Bot Accounts (%d) ---\n", len(activeClients))
 				for id := range activeClients {
@@ -163,15 +172,25 @@ func main() {
 				}
 				fmt.Println("--------------------------------")
 				clientsMu.Unlock()
+			case "ngrok on":
+				startNgrok()
+			case "ngrok off":
+				stopNgrok()
+			case "ngrok":
+				if publicTunnel.Enabled() {
+					fmt.Println("🌐 [NGROK] Tunnel is ON")
+				} else {
+					fmt.Println("🔒 [NGROK] Tunnel is OFF")
+				}
 			}
 		}
 	}()
 
-	// Graceful shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
 
+	stopNgrok()
 	fmt.Println("\nShutting down all WhatsApp clients gracefully...")
 	clientsMu.Lock()
 	for _, client := range activeClients {
