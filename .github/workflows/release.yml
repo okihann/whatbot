@@ -36,9 +36,19 @@ jobs:
         run: |
           set -euo pipefail
           cat << 'EOF' > index.js
-          const { Shazam } = require('node-shazam');
           const fs = require('fs');
+
+          // node-shazam uses @ffmpeg-installer/ffmpeg internally. In a pkg
+          // executable its normal installer path points into /snapshot and
+          // cannot be executed. Override it before node-shazam is required.
+          if (process.env.SHAZAM_FFMPEG_PATH) {
+              const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+              ffmpegInstaller.path = process.env.SHAZAM_FFMPEG_PATH;
+          }
+
+          const { Shazam } = require('node-shazam');
           const shazam = new Shazam();
+
           async function run() {
               const audioFile = process.argv[2];
               if (!audioFile || !fs.existsSync(audioFile)) {
@@ -68,6 +78,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export SHAZAM_FFMPEG_PATH="$(command -v ffmpeg)"
           output="$(./shazam-cli /definitely/missing/file.mp3)"
           echo "$output"
           grep -F 'File not found' <<< "$output"
@@ -183,7 +194,7 @@ jobs:
               utils/bin/ffmpeg -version | head -n1
               utils/bin/ffprobe -version | head -n1
               utils/bin/yt-dlp --version
-              utils/bin/shazam-cli /definitely/missing/file.mp3 | grep -F 'File not found'
+              SHAZAM_FFMPEG_PATH="$(pwd)/utils/bin/ffmpeg" utils/bin/shazam-cli /definitely/missing/file.mp3 | grep -F 'File not found'
               ;;
             *) echo 'Cross-architecture build: embedded files verified; native execution requires the matching target runner.' ;;
           esac
