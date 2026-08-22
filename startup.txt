@@ -1,0 +1,1 @@
+../../../bin/bash /home/container/bot/build.sh
