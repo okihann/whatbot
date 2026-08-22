@@ -23,7 +23,10 @@ jobs:
       - name: Setup Node.js Environment
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          # @yao-pkg/pkg 6.22 uses undici APIs that require a modern host Node.
+          # This is only the Node version running pkg itself; the generated
+          # executable still targets Node 18 below.
+          node-version: '20'
 
       - name: Initialize and install dependencies
         shell: bash
@@ -67,8 +70,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Do not use --build: pkg should fetch its prebuilt Node runtime.
-          # If pkg cannot fetch it, its own error is surfaced immediately by the 5-minute job timeout.
+          # pkg itself runs under Node 20, while the produced binary remains
+          # Node 18 Linux x64 for compatibility with the original CLI.
           pkg index.js --target node18-linux-x64 --output shazam-cli
           test -s shazam-cli
 
