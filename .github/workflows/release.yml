@@ -24,6 +24,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
+
       - name: Initialize and Install Latest Library
         shell: bash
         run: |
@@ -31,6 +32,7 @@ jobs:
           npm init -y
           npm install node-shazam@latest
           npm install -g @yao-pkg/pkg
+
       - name: Generate the Bridge Code
         shell: bash
         run: |
@@ -38,23 +40,19 @@ jobs:
           cat << 'EOF' > index.js
           const fs = require('fs');
 
-          // node-shazam uses @ffmpeg-installer/ffmpeg internally. In a pkg
-          // executable its normal installer path points into /snapshot and
-          // cannot be executed. Override it before node-shazam is required.
-          if (process.env.SHAZAM_FFMPEG_PATH) {
-              const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
-              ffmpegInstaller.path = process.env.SHAZAM_FFMPEG_PATH;
-          }
-
-          const { Shazam } = require('node-shazam');
-          const shazam = new Shazam();
-
           async function run() {
               const audioFile = process.argv[2];
               if (!audioFile || !fs.existsSync(audioFile)) {
                   console.log(JSON.stringify({success: false, error: "File not found"}));
                   return;
               }
+
+              // Lazy-load node-shazam only after we know the file exists.
+              // This prevents the bundled ffmpeg lookup from crashing the binary
+              // when the input file is missing.
+              const { Shazam } = require('node-shazam');
+              const shazam = new Shazam();
+
               try {
                   const result = await shazam.recognise(audioFile);
                   if (result && result.track) {
@@ -68,20 +66,22 @@ jobs:
           }
           run();
           EOF
+
       - name: Compile to Standalone Linux Binary
         shell: bash
         run: |
           set -euo pipefail
           pkg index.js --target node18-linux-x64 --output shazam-cli
           test -s shazam-cli
+
       - name: Smoke test Shazam CLI
         shell: bash
         run: |
           set -euo pipefail
-          export SHAZAM_FFMPEG_PATH="$(command -v ffmpeg)"
           output="$(./shazam-cli /definitely/missing/file.mp3)"
           echo "$output"
           grep -F 'File not found' <<< "$output"
+
       - name: Publish Shazam Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -103,27 +103,32 @@ jobs:
           - {name: windows-amd64, goos: windows, goarch: amd64, ffmpeg_asset: ffmpeg-master-latest-win64-gpl.zip, ytdlp_asset: yt-dlp.exe, ext: '.exe'}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
       - name: Prepare embedded dependency directory
         shell: bash
         run: |
           set -euo pipefail
           rm -rf utils/bin
           mkdir -p utils/bin
+
       - name: Download Shazam CLI
         uses: actions/download-artifact@v4
         with:
           name: shazam-cli-linux-amd64
           path: /tmp/shazam
+
       - name: Install Shazam CLI
         shell: bash
         run: |
           set -euo pipefail
           cp /tmp/shazam/shazam-cli utils/bin/shazam-cli
           chmod +x utils/bin/shazam-cli
+
       - name: Download FFmpeg and FFprobe
         shell: bash
         run: |
@@ -143,6 +148,7 @@ jobs:
           cp "$ffmpeg_path" utils/bin/ffmpeg
           cp "$ffprobe_path" utils/bin/ffprobe
           chmod +x utils/bin/ffmpeg utils/bin/ffprobe || true
+
       - name: Download pinned yt-dlp
         shell: bash
         run: |
@@ -155,6 +161,7 @@ jobs:
           esac
           curl -fL --retry 3 "$url" -o utils/bin/yt-dlp
           chmod +x utils/bin/yt-dlp || true
+
       - name: Verify embedded dependencies
         shell: bash
         run: |
@@ -163,11 +170,14 @@ jobs:
           test -s utils/bin/ffprobe
           test -s utils/bin/yt-dlp
           test -s utils/bin/shazam-cli
+
       - name: Resolve Go dependencies
         run: go mod tidy
+
       - name: Install Garble
         if: env.OBFUSCATE == 'true'
         run: go install mvdan.cc/garble@latest
+
       - name: Build Whatbot
         env:
           GOOS: ${{ matrix.goos }}
@@ -185,6 +195,7 @@ jobs:
           else
             go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$output" .
           fi
+
       - name: Smoke test embedded tools
         shell: bash
         run: |
@@ -198,17 +209,20 @@ jobs:
               ;;
             *) echo 'Cross-architecture build: embedded files verified; native execution requires the matching target runner.' ;;
           esac
+
       - name: Smoke test Whatbot binary
         shell: bash
         run: |
           set -euo pipefail
           test -s "dist/whatbot-${{ matrix.name }}${{ matrix.ext }}"
           file "dist/whatbot-${{ matrix.name }}${{ matrix.ext }}"
+
       - name: Package
         shell: bash
         run: |
           set -euo pipefail
           tar -czf "whatbot-${{ matrix.name }}.tar.gz" -C dist "$(basename dist/whatbot-${{ matrix.name }}${{ matrix.ext }})"
+
       - uses: actions/upload-artifact@v4
         with:
           name: whatbot-${{ matrix.name }}
@@ -225,8 +239,10 @@ jobs:
           path: artifacts
           pattern: whatbot-*
           merge-multiple: true
+
       - name: Generate checksums
         run: sha256sum artifacts/*.tar.gz > artifacts/SHA256SUMS
+
       - name: Determine release tag
         id: release_tag
         shell: bash
@@ -238,11 +254,13 @@ jobs:
             tag="v$(date -u +%Y.%m.%d)-${GITHUB_RUN_NUMBER}"
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
           fi
+
       - name: Create tag for manual release
         if: github.ref_type != 'tag'
         uses: EndBug/latest-tag@latest
         with:
           ref: ${{ steps.release_tag.outputs.tag }}
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
