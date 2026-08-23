@@ -95,13 +95,15 @@ jobs:
 
       - name: Download Shazam CLI from release
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          url="https://github.com/${{ github.repository }}/releases/download/shazam-cli-latest/${{ matrix.shazam_asset }}"
-          curl -fL --retry 3 \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "$url" -o /tmp/shazam-cli
-          cp /tmp/shazam-cli utils/bin/shazam-cli
+          mkdir -p /tmp/shazam-download
+          gh release download shazam-cli-latest \
+            --pattern "${{ matrix.shazam_asset }}" \
+            --dir /tmp/shazam-download
+          cp "/tmp/shazam-download/${{ matrix.shazam_asset }}" utils/bin/shazam-cli
           chmod +x utils/bin/shazam-cli || true
 
       - name: Download FFmpeg and FFprobe via npm packages
