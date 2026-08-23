@@ -185,7 +185,9 @@ jobs:
               utils/bin/ffmpeg -version | head -n1
               utils/bin/ffprobe -version | head -n1
               utils/bin/yt-dlp --version
-              utils/bin/shazam-cli /definitely/missing/file.mp3 | grep -F 'File not found'
+              output="$(utils/bin/shazam-cli /definitely/missing/file.mp3 || true)"
+              echo "$output"
+              grep -F 'File not found' <<< "$output"
               ;;
             *) echo 'Cross-architecture build: embedded files verified; native execution requires the matching target runner.' ;;
           esac
