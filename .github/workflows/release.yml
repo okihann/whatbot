@@ -15,92 +15,69 @@ env:
   YTDLP_VERSION: '2026.06.09'
 
 jobs:
-  shazam:
-    name: Build Shazam CLI
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Setup Node.js Environment
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Initialize and Install Latest Library
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm init -y
-          npm install node-shazam@latest
-          npm install -g @yao-pkg/pkg
-
-      - name: Generate the Bridge Code
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat << 'EOF' > index.js
-          const fs = require('fs');
-
-          async function run() {
-              const audioFile = process.argv[2];
-              if (!audioFile || !fs.existsSync(audioFile)) {
-                  console.log(JSON.stringify({success: false, error: "File not found"}));
-                  return;
-              }
-
-              // Lazy-load node-shazam only after we know the file exists.
-              // This prevents the bundled ffmpeg lookup from crashing the binary
-              // when the input file is missing.
-              const { Shazam } = require('node-shazam');
-              const shazam = new Shazam();
-
-              try {
-                  const result = await shazam.recognise(audioFile);
-                  if (result && result.track) {
-                      console.log(JSON.stringify({success: true, title: result.track.title, artist: result.track.subtitle, url: result.track.url}));
-                  } else {
-                      console.log(JSON.stringify({success: false, error: "No match found"}));
-                  }
-              } catch (e) {
-                  console.log(JSON.stringify({success: false, error: e.message}));
-              }
-          }
-          run();
-          EOF
-
-      - name: Compile to Standalone Linux Binary
-        shell: bash
-        run: |
-          set -euo pipefail
-          pkg index.js --target node18-linux-x64 --output shazam-cli
-          test -s shazam-cli
-
-      - name: Smoke test Shazam CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          output="$(./shazam-cli /definitely/missing/file.mp3)"
-          echo "$output"
-          grep -F 'File not found' <<< "$output"
-
-      - name: Publish Shazam Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: shazam-cli-linux-amd64
-          path: shazam-cli
-          if-no-files-found: error
-
   build:
     name: Build ${{ matrix.name }}
-    needs: shazam
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {name: linux-amd64, goos: linux, goarch: amd64, ffmpeg_asset: ffmpeg-master-latest-linux64-gpl.tar.xz, ytdlp_asset: yt-dlp_linux, ext: ''}
-          - {name: linux-arm64, goos: linux, goarch: arm64, ffmpeg_asset: ffmpeg-master-latest-linuxarm64-lgpl-shared.tar.xz, ytdlp_asset: yt-dlp_linux_aarch64, ext: ''}
-          - {name: windows-amd64, goos: windows, goarch: amd64, ffmpeg_asset: ffmpeg-master-latest-win64-gpl.zip, ytdlp_asset: yt-dlp.exe, ext: '.exe'}
+          - name: linux-amd64
+            goos: linux
+            goarch: amd64
+            ext: ''
+            shazam_asset: shazam-cli-linux-amd64
+            ffmpeg_package: '@ffmpeg-installer/linux-x64'
+            ffprobe_package: '@ffprobe-installer/linux-x64'
+            ffmpeg_bin: ffmpeg
+            ffprobe_bin: ffprobe
+            ytdlp_asset: yt-dlp_linux
+
+          - name: linux-arm64
+            goos: linux
+            goarch: arm64
+            ext: ''
+            shazam_asset: shazam-cli-linux-arm64
+            ffmpeg_package: '@ffmpeg-installer/linux-arm64'
+            ffprobe_package: '@ffprobe-installer/linux-arm64'
+            ffmpeg_bin: ffmpeg
+            ffprobe_bin: ffprobe
+            ytdlp_asset: yt-dlp_linux_aarch64
+
+          - name: macos-amd64
+            goos: darwin
+            goarch: amd64
+            ext: ''
+            shazam_asset: shazam-cli-macos-amd64
+            ffmpeg_package: '@ffmpeg-installer/darwin-x64'
+            ffprobe_package: '@ffprobe-installer/darwin-x64'
+            ffmpeg_bin: ffmpeg
+            ffprobe_bin: ffprobe
+            ytdlp_asset: yt-dlp_macos
+
+          - name: macos-arm64
+            goos: darwin
+            goarch: arm64
+            ext: ''
+            shazam_asset: shazam-cli-macos-arm64
+            ffmpeg_package: '@ffmpeg-installer/darwin-arm64'
+            ffprobe_package: '@ffprobe-installer/darwin-arm64'
+            ffmpeg_bin: ffmpeg
+            ffprobe_bin: ffprobe
+            ytdlp_asset: yt-dlp_macos
+
+          - name: windows-amd64
+            goos: windows
+            goarch: amd64
+            ext: '.exe'
+            shazam_asset: shazam-cli-windows-amd64.exe
+            ffmpeg_package: '@ffmpeg-installer/win32-x64'
+            ffprobe_package: '@ffprobe-installer/win32-x64'
+            ffmpeg_bin: ffmpeg.exe
+            ffprobe_bin: ffprobe.exe
+            ytdlp_asset: yt-dlp.exe
+
     steps:
       - uses: actions/checkout@v4
 
@@ -116,38 +93,36 @@ jobs:
           rm -rf utils/bin
           mkdir -p utils/bin
 
-      - name: Download Shazam CLI
-        uses: actions/download-artifact@v4
-        with:
-          name: shazam-cli-linux-amd64
-          path: /tmp/shazam
-
-      - name: Install Shazam CLI
+      - name: Download Shazam CLI from release
         shell: bash
         run: |
           set -euo pipefail
-          cp /tmp/shazam/shazam-cli utils/bin/shazam-cli
-          chmod +x utils/bin/shazam-cli
+          url="https://github.com/${{ github.repository }}/releases/download/shazam-cli-latest/${{ matrix.shazam_asset }}"
+          curl -fL --retry 3 "$url" -o /tmp/shazam-cli
+          cp /tmp/shazam-cli utils/bin/shazam-cli
+          chmod +x utils/bin/shazam-cli || true
 
-      - name: Download FFmpeg and FFprobe
+      - name: Download FFmpeg and FFprobe via npm packages
         shell: bash
         run: |
           set -euo pipefail
-          url="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${{ matrix.ffmpeg_asset }}"
-          curl -fL --retry 3 "$url" -o /tmp/ffmpeg-package
-          mkdir -p /tmp/ffmpeg-extract
-          case "${{ matrix.ffmpeg_asset }}" in
-            *.zip) unzip -q /tmp/ffmpeg-package -d /tmp/ffmpeg-extract ;;
-            *.tar.xz) tar -xJf /tmp/ffmpeg-package -C /tmp/ffmpeg-extract ;;
-            *) echo "Unsupported FFmpeg archive"; exit 1 ;;
-          esac
-          ffmpeg_path="$(find /tmp/ffmpeg-extract -type f \( -name 'ffmpeg' -o -name 'ffmpeg.exe' \) | head -n1)"
-          ffprobe_path="$(find /tmp/ffmpeg-extract -type f \( -name 'ffprobe' -o -name 'ffprobe.exe' \) | head -n1)"
-          test -n "$ffmpeg_path"
-          test -n "$ffprobe_path"
-          cp "$ffmpeg_path" utils/bin/ffmpeg
-          cp "$ffprobe_path" utils/bin/ffprobe
-          chmod +x utils/bin/ffmpeg utils/bin/ffprobe || true
+          mkdir -p /tmp/ffmpeg-download /tmp/ffprobe-download
+
+          # FFmpeg
+          npm pack ${{ matrix.ffmpeg_package }} --pack-destination /tmp/ffmpeg-download >/dev/null
+          ffmpeg_tarball=$(find /tmp/ffmpeg-download -name '*.tgz' -print -quit)
+          tar -xzf "$ffmpeg_tarball" -C /tmp/ffmpeg-download
+          ffmpeg_dir=$(find /tmp/ffmpeg-download -maxdepth 1 -type d -name 'package*' -print -quit)
+          cp "$ffmpeg_dir/${{ matrix.ffmpeg_bin }}" utils/bin/ffmpeg
+          chmod +x utils/bin/ffmpeg || true
+
+          # FFprobe
+          npm pack ${{ matrix.ffprobe_package }} --pack-destination /tmp/ffprobe-download >/dev/null
+          ffprobe_tarball=$(find /tmp/ffprobe-download -name '*.tgz' -print -quit)
+          tar -xzf "$ffprobe_tarball" -C /tmp/ffprobe-download
+          ffprobe_dir=$(find /tmp/ffprobe-download -maxdepth 1 -type d -name 'package*' -print -quit)
+          cp "$ffprobe_dir/${{ matrix.ffprobe_bin }}" utils/bin/ffprobe
+          chmod +x utils/bin/ffprobe || true
 
       - name: Download pinned yt-dlp
         shell: bash
@@ -157,6 +132,7 @@ jobs:
             yt-dlp.exe) url="https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp.exe" ;;
             yt-dlp_linux) url="https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp_linux" ;;
             yt-dlp_linux_aarch64) url="https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp_linux_aarch64" ;;
+            yt-dlp_macos) url="https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp_macos" ;;
             *) echo "Unsupported yt-dlp asset"; exit 1 ;;
           esac
           curl -fL --retry 3 "$url" -o utils/bin/yt-dlp
@@ -205,7 +181,7 @@ jobs:
               utils/bin/ffmpeg -version | head -n1
               utils/bin/ffprobe -version | head -n1
               utils/bin/yt-dlp --version
-              SHAZAM_FFMPEG_PATH="$(pwd)/utils/bin/ffmpeg" utils/bin/shazam-cli /definitely/missing/file.mp3 | grep -F 'File not found'
+              utils/bin/shazam-cli /definitely/missing/file.mp3 | grep -F 'File not found'
               ;;
             *) echo 'Cross-architecture build: embedded files verified; native execution requires the matching target runner.' ;;
           esac
@@ -234,6 +210,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # ✅ Checkout is required for EndBug/latest-tag (it needs a Git repo)
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
