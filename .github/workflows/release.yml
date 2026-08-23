@@ -98,7 +98,9 @@ jobs:
         run: |
           set -euo pipefail
           url="https://github.com/${{ github.repository }}/releases/download/shazam-cli-latest/${{ matrix.shazam_asset }}"
-          curl -fL --retry 3 "$url" -o /tmp/shazam-cli
+          curl -fL --retry 3 \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "$url" -o /tmp/shazam-cli
           cp /tmp/shazam-cli utils/bin/shazam-cli
           chmod +x utils/bin/shazam-cli || true
 
@@ -210,7 +212,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      # ✅ Checkout is required for EndBug/latest-tag (it needs a Git repo)
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
