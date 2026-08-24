@@ -223,6 +223,8 @@ type OpenAIChatResponse struct {
 	SystemFingerprint string         `json:"system_fingerprint,omitempty"`
 	Choices           []OpenAIChoice `json:"choices"`
 	Usage             Usage          `json:"usage"`
+	Reasoning         string         `json:"reasoning,omitempty"`      // NEW
+	SearchOutput      string         `json:"search_output,omitempty"`  // NEW
 }
 
 // Streaming SSE Types
@@ -256,6 +258,7 @@ type AISession struct {
 	Role     string        `json:"role"`
 	Messages []ChatMessage `json:"messages"`
 	UserID   string        `json:"-"`
+	Tools    interface{}   `json:"tools,omitempty"` // NEW
 }
 
 type UserData struct {
