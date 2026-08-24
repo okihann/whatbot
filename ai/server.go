@@ -129,6 +129,35 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		Messages: req.Messages,
 	}
 
+	// Apply Think mode
+	if req.ThinkEnabled {
+		systemMsg := types.ChatMessage{
+			Role:    "system",
+			Content: "You are in deep-think mode. Think step by step, reason carefully, and provide a detailed answer.",
+		}
+		req.Messages = append([]types.ChatMessage{systemMsg}, req.Messages...)
+	}
+	
+	// Apply Web Search (pre‑processing)
+	if req.WebSearchEnabled {
+		// Find the last user message
+		var lastUserContent string
+		for i := len(req.Messages) - 1; i >= 0; i-- {
+			if req.Messages[i].Role == "user" {
+				lastUserContent = req.Messages[i].Content
+				break
+			}
+		}
+		if lastUserContent != "" {
+			searchResult := PerformWebSearch(lastUserContent)
+			systemSearch := types.ChatMessage{
+				Role:    "system",
+				Content: "Here are relevant web search results:\n" + searchResult,
+			}
+			req.Messages = append([]types.ChatMessage{systemSearch}, req.Messages...)
+		}
+	}
+
 	aiResponse, err := GenerateAIResponse(tempSession)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": {"message": "%s"}}`, err.Error()), http.StatusInternalServerError)
