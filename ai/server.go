@@ -123,10 +123,19 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tempSession := &types.AISession{
+	// Build tools list based on user toggle
+	var tools []interface{}
+	// Always include sandbox tools (they are useful)
+	tools = append(tools, RunCommandTool, UnzipTool)
+	if req.WebSearchEnabled {
+		tools = append(tools, WebSearchTool)
+	}
+
+	session := &types.AISession{
 		ID:       "web-client-session",
 		Model:    req.Model,
 		Messages: req.Messages,
+		Tools:    tools,
 	}
 
 	// Apply Think mode
@@ -135,34 +144,31 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 			Role:    "system",
 			Content: "You are in deep-think mode. Think step by step, reason carefully, and provide a detailed answer.",
 		}
-		req.Messages = append([]types.ChatMessage{systemMsg}, req.Messages...)
-	}
-	
-	// Apply Web Search (pre‑processing)
-	if req.WebSearchEnabled {
-		// Find the last user message
-		var lastUserContent string
-		for i := len(req.Messages) - 1; i >= 0; i-- {
-			if req.Messages[i].Role == "user" {
-				lastUserContent = req.Messages[i].Content
-				break
-			}
-		}
-		if lastUserContent != "" {
-			searchResult := PerformWebSearch(lastUserContent)
-			systemSearch := types.ChatMessage{
-				Role:    "system",
-				Content: "Here are relevant web search results:\n" + searchResult,
-			}
-			req.Messages = append([]types.ChatMessage{systemSearch}, req.Messages...)
-		}
+		session.Messages = append([]types.ChatMessage{systemMsg}, session.Messages...)
 	}
 
-	aiResponse, err := GenerateAIResponse(tempSession)
+	var reasoningBuilder strings.Builder
+	var searchOutputBuilder strings.Builder
+
+	aiResponse, err := GenerateAIResponseWithTrace(session, &reasoningBuilder, &searchOutputBuilder)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": {"message": "%s"}}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
+
+	// Embed reasoning and search output into final content using special tags
+	var finalContent strings.Builder
+	if reasoningBuilder.Len() > 0 {
+		finalContent.WriteString("<reasoning>")
+		finalContent.WriteString(reasoningBuilder.String())
+		finalContent.WriteString("</reasoning>\n")
+	}
+	if searchOutputBuilder.Len() > 0 {
+		finalContent.WriteString("<search_output>")
+		finalContent.WriteString(searchOutputBuilder.String())
+		finalContent.WriteString("</search_output>\n")
+	}
+	finalContent.WriteString(aiResponse)
 
 	timestamp := time.Now().Unix()
 	baseID := fmt.Sprintf("chatcmpl-%d", timestamp)
@@ -175,7 +181,7 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		Choices: []types.OpenAIChoice{
 			{
 				Index:        0,
-				Message:      types.ChatMessage{Role: "assistant", Content: aiResponse},
+				Message:      types.ChatMessage{Role: "assistant", Content: finalContent.String()},
 				FinishReason: "stop",
 			},
 		},
