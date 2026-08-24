@@ -197,6 +197,9 @@ type OpenAIChatRequest struct {
 	User             string        `json:"user,omitempty"`
 	Tools            interface{}   `json:"tools,omitempty"`
 	ToolChoice       interface{}   `json:"tool_choice,omitempty"`
+
+	WebSearchEnabled bool `json:"webSearchEnabled,omitempty"`
+	ThinkEnabled     bool `json:"thinkEnabled,omitempty"`
 }
 
 type Usage struct {
