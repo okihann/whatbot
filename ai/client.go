@@ -12,7 +12,7 @@ import (
 	"bot/types"
 )
 
-func GenerateAIResponseWithTrace(sess *types.AISession, reasoning *strings.Builder, searchOutput *strings.Builder) (string, error) {
+func GenerateAIResponseWithTrace(sess *types.AISession, process *strings.Builder, searchOutput *strings.Builder) (string, error) {
 	if len(sess.Messages) > 25 {
 		return "⚠️ **System Override:** AI execution terminated. Maximum autonomous tool limit (10) reached.", nil
 	}
@@ -92,7 +92,6 @@ func GenerateAIResponseWithTrace(sess *types.AISession, reasoning *strings.Build
 
 			message := choices[0].(map[string]interface{})["message"].(map[string]interface{})
 
-			// --- TOOL EXECUTION BLOCK (handle all tool calls) ---
 			if rawToolCalls, ok := message["tool_calls"].([]interface{}); ok && len(rawToolCalls) > 0 {
 				assistantMsg := types.ChatMessage{
 					Role:      "assistant",
@@ -123,18 +122,18 @@ func GenerateAIResponseWithTrace(sess *types.AISession, reasoning *strings.Build
 						log.Printf("🔍 [AI TOOL] Web search: '%s'\n", args["query"])
 						toolOutput = PerformWebSearch(args["query"])
 						searchOutput.WriteString(fmt.Sprintf("Query: %s\n%s\n\n", args["query"], toolOutput))
-						reasoning.WriteString(fmt.Sprintf("🔍 Searching for: %s\n", args["query"]))
+						process.WriteString(fmt.Sprintf("🔍 Searching for: %s\n", args["query"]))
 					case "run_command":
 						log.Printf("💻 [AI TOOL] Command execution: '%s'\n", args["command"])
 						toolOutput = ExecuteSandboxedCommand(args["command"])
-						reasoning.WriteString(fmt.Sprintf("💻 Executing command: %s\n%s\n\n", args["command"], toolOutput))
+						process.WriteString(fmt.Sprintf("💻 Executing command: %s\n", args["command"]))
 					case "unzip_file":
 						log.Printf("📦 [AI TOOL] Unzipping: '%s'\n", args["zip_filename"])
 						toolOutput = ExtractZip(args["zip_filename"])
-						reasoning.WriteString(fmt.Sprintf("📦 Unzipping: %s\n%s\n\n", args["zip_filename"], toolOutput))
+						process.WriteString(fmt.Sprintf("📦 Unzipping: %s\n", args["zip_filename"]))
 					default:
 						toolOutput = fmt.Sprintf("Error: unknown tool %s", toolCall.Function.Name)
-						reasoning.WriteString(fmt.Sprintf("❌ Unknown tool: %s\n", toolCall.Function.Name))
+						process.WriteString(fmt.Sprintf("❌ Unknown tool: %s\n", toolCall.Function.Name))
 					}
 
 					sess.Messages = append(sess.Messages, types.ChatMessage{
@@ -144,11 +143,9 @@ func GenerateAIResponseWithTrace(sess *types.AISession, reasoning *strings.Build
 					})
 				}
 
-				// Recursively call to get final answer
-				return GenerateAIResponseWithTrace(sess, reasoning, searchOutput)
+				return GenerateAIResponseWithTrace(sess, process, searchOutput)
 			}
 
-			// --- FINAL CONTENT (no UI logs) ---
 			if content, ok := message["content"].(string); ok {
 				return content, nil
 			}
