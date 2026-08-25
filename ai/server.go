@@ -123,9 +123,8 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build tools list based on user toggle
+	// Build tools based on user toggle
 	var tools []interface{}
-	// Always include sandbox tools (they are useful)
 	tools = append(tools, RunCommandTool, UnzipTool)
 	if req.WebSearchEnabled {
 		tools = append(tools, WebSearchTool)
@@ -138,7 +137,6 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		Tools:    tools,
 	}
 
-	// Apply Think mode
 	if req.ThinkEnabled {
 		systemMsg := types.ChatMessage{
 			Role:    "system",
@@ -147,21 +145,20 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		session.Messages = append([]types.ChatMessage{systemMsg}, session.Messages...)
 	}
 
-	var reasoningBuilder strings.Builder
+	var processBuilder strings.Builder
 	var searchOutputBuilder strings.Builder
 
-	aiResponse, err := GenerateAIResponseWithTrace(session, &reasoningBuilder, &searchOutputBuilder)
+	aiResponse, err := GenerateAIResponseWithTrace(session, &processBuilder, &searchOutputBuilder)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": {"message": "%s"}}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
 
-	// Embed reasoning and search output into final content using special tags
 	var finalContent strings.Builder
-	if reasoningBuilder.Len() > 0 {
-		finalContent.WriteString("<reasoning>")
-		finalContent.WriteString(reasoningBuilder.String())
-		finalContent.WriteString("</reasoning>\n")
+	if processBuilder.Len() > 0 {
+		finalContent.WriteString("<process>")
+		finalContent.WriteString(processBuilder.String())
+		finalContent.WriteString("</process>\n")
 	}
 	if searchOutputBuilder.Len() > 0 {
 		finalContent.WriteString("<search_output>")
