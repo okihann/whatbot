@@ -12,135 +12,179 @@ import (
 	"bot/types"
 )
 
-async function handleChat(request, env) {
-  const rate = await checkRateLimit(request, env);
-  if (!rate.allowed) return jsonResponse({ error: 'Too many requests' }, 429);
+func GenerateAIResponseWithTrace(sess *types.AISession, reasoning *strings.Builder, searchOutput *strings.Builder) (types.ChatMessage, error) {
+	if len(sess.Messages) > 25 {
+		return types.ChatMessage{Content: "⚠️ **System Override:** AI execution terminated. Maximum autonomous tool limit (10) reached."}, nil
+	}
 
-  const auth = await requireAuth(request, env);
-  if (auth.error) return jsonResponse({ error: auth.error }, 401);
+	hasSystem := false
+	for _, m := range sess.Messages {
+		if m.Role == "system" {
+			hasSystem = true
+			break
+		}
+	}
+	if !hasSystem {
+		sysMsg := types.ChatMessage{
+			Role:    "system",
+			Content: "You are an advanced AI Agent operating in a sandboxed Linux environment. You have permission to use up to 10 tool calls per request to solve the user's problem. Always think step-by-step and utilize the provided tools when necessary.",
+		}
+		sess.Messages = append([]types.ChatMessage{sysMsg}, sess.Messages...)
+	}
 
-  try {
-    const {
-      messages,
-      model,
-      customBaseUrl,
-      customApiKey,
-      webSearchEnabled,
-      thinkEnabled,
-      mcpServerUrl,
-      mcpApiKey,
-    } = await request.json();
+	cached, err := GetCachedModel(sess.Model)
+	if err != nil {
+		return types.ChatMessage{}, err
+	}
 
-    if (!customBaseUrl) return jsonResponse({ error: 'Missing Base URL' }, 400);
+	provider := cached.Provider
+	actualModelID := cached.ActualID
 
-    // Fetch MCP tools once
-    let mcpTools = [];
-    if (mcpServerUrl) {
-      try {
-        mcpTools = await listMCPServerTools(mcpServerUrl, mcpApiKey);
-      } catch (e) {
-        console.error('MCP list error:', e);
-        return jsonResponse({ error: `MCP server error: ${e.message}` }, 502);
-      }
-    }
+	payload := map[string]interface{}{
+		"model":    actualModelID,
+		"messages": sess.Messages,
+	}
+	if sess.Tools != nil {
+		payload["tools"] = sess.Tools
+		payload["tool_choice"] = "auto"
+	}
 
-    const endpoint = `${customBaseUrl.replace(/\/$/, '')}/chat/completions`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 58000);
+	payloadBytes, _ := json.Marshal(payload)
+	endpoint := provider.BaseURL
+	if endpoint[len(endpoint)-1] == '/' {
+		endpoint = endpoint[:len(endpoint)-1]
+	}
 
-    let currentMessages = messages; // Start with original messages
-    let aiMessage;
+	var lastResponseBody string
+	keyAttempts := len(provider.APIKeys)
+	if keyAttempts == 0 {
+		keyAttempts = 1
+	}
 
-    // Tool call loop (max 5 iterations)
-    for (let i = 0; i < 5; i++) {
-      const payload = {
-        model: model || 'anyapi/llama-3.1-8b-instant',
-        messages: currentMessages,
-        webSearchEnabled: !!webSearchEnabled,
-        thinkEnabled: !!thinkEnabled,
-        stream: false,
-      };
+	apiPath := "/chat/completions"
 
-      if (mcpTools.length > 0) {
-        payload.tools = mcpTools;
-        payload.tool_choice = 'auto';
-      }
+	for attempt := 0; attempt < keyAttempts; attempt++ {
+		apiKey := provider.GetNextKey()
 
-      const resp = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${customApiKey || ''}`,
-          'ngrok-skip-browser-warning': 'true',
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
+		req, _ := http.NewRequest("POST", endpoint+apiPath, bytes.NewBuffer(payloadBytes))
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+		req.Header.Set("Accept", "application/json")
 
-      if (!resp.ok) {
-        const errText = await resp.text();
-        return jsonResponse({ error: `Backend returned ${resp.status}: ${errText}` }, resp.status);
-      }
+		resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
+		if err != nil {
+			log.Printf("❌ [PROVIDER NET ERROR] %s: %v\n", provider.Name, err)
+			continue
+		}
 
-      const data = await resp.json();
-      aiMessage = data.choices?.[0]?.message;
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 
-      // If no tool calls, we're done
-      if (!aiMessage?.tool_calls?.length) break;
+		if resp.StatusCode == 200 {
+			var aiResult map[string]interface{}
+			json.Unmarshal(body, &aiResult)
 
-      // Add assistant message with tool calls to currentMessages
-      currentMessages.push(aiMessage);
+			choices, ok := aiResult["choices"].([]interface{})
+			if !ok || len(choices) == 0 {
+				return types.ChatMessage{}, fmt.Errorf("invalid API response format")
+			}
 
-      // Execute each MCP tool and collect results
-      const toolResults = [];
-      for (const toolCall of aiMessage.tool_calls) {
-        const toolName = toolCall.function.name;
-        const toolArgs = JSON.parse(toolCall.function.arguments || '{}');
-        try {
-          const result = await executeMCPTool(mcpServerUrl, mcpApiKey, toolName, toolArgs);
-          toolResults.push({
-            tool_call_id: toolCall.id,
-            role: 'tool',
-            content: JSON.stringify(result),
-          });
-        } catch (e) {
-          toolResults.push({
-            tool_call_id: toolCall.id,
-            role: 'tool',
-            content: `Error: ${e.message}`,
-          });
-        }
-      }
+			message := choices[0].(map[string]interface{})["message"].(map[string]interface{})
 
-      // Append tool results
-      currentMessages.push(...toolResults);
-    }
+			// Build assistant message from response
+			assistantMsg := types.ChatMessage{
+				Role: "assistant",
+			}
+			if content, ok := message["content"].(string); ok {
+				assistantMsg.Content = content
+			}
 
-    // If we exited loop due to max iterations without final answer, use last aiMessage content
-    const aiText = aiMessage?.content || 'No response.';
+			if rawToolCalls, ok := message["tool_calls"].([]interface{}); ok && len(rawToolCalls) > 0 {
+				assistantMsg.ToolCalls = []types.ToolCall{}
+				for _, raw := range rawToolCalls {
+					tc := raw.(map[string]interface{})
+					funcData := tc["function"].(map[string]interface{})
+					assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, types.ToolCall{
+						ID:   tc["id"].(string),
+						Type: "function",
+						Function: types.FunctionCall{
+							Name:      funcData["name"].(string),
+							Arguments: funcData["arguments"].(string),
+						},
+					})
+				}
 
-    // Stream final content back
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(ctrl) {
-        ctrl.enqueue(encoder.encode(`0:${JSON.stringify(aiText)}\n`));
-        ctrl.close();
-      },
-    });
+				// Append assistant message to session
+				sess.Messages = append(sess.Messages, assistantMsg)
 
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'x-vercel-ai-data-stream': 'v1',
-        ...corsHeaders,
-        ...securityHeaders,
-      },
-    });
-  } catch (e) {
-    console.error('Chat handler error:', e);
-    if (e.name === 'AbortError') return jsonResponse({ error: 'Timeout' }, 504);
-    return jsonResponse({ error: e.message }, 500);
-  }
+				unknownToolFound := false
+
+				// Execute each tool call (only known tools)
+				for _, toolCall := range assistantMsg.ToolCalls {
+					var args map[string]string
+					json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
+
+					var toolOutput string
+					known := true
+					switch toolCall.Function.Name {
+					case "web_search":
+						log.Printf("🔍 [AI TOOL] Web search: '%s'\n", args["query"])
+						toolOutput = PerformWebSearch(args["query"])
+						searchOutput.WriteString(fmt.Sprintf("Query: %s\n%s\n\n", args["query"], toolOutput))
+						reasoning.WriteString(fmt.Sprintf("🔍 Searching for: %s\n", args["query"]))
+					case "run_command":
+						log.Printf("💻 [AI TOOL] Command execution: '%s'\n", args["command"])
+						toolOutput = ExecuteSandboxedCommand(args["command"])
+						reasoning.WriteString(fmt.Sprintf("💻 Executing command: %s\n", args["command"]))
+					case "unzip_file":
+						log.Printf("📦 [AI TOOL] Unzipping: '%s'\n", args["zip_filename"])
+						toolOutput = ExtractZip(args["zip_filename"])
+						reasoning.WriteString(fmt.Sprintf("📦 Unzipping: %s\n", args["zip_filename"]))
+					default:
+						known = false
+						unknownToolFound = true
+						// Do not execute unknown tools; let Worker handle them
+						toolOutput = "" // will not append tool result
+					}
+
+					if known {
+						// Append tool result message
+						sess.Messages = append(sess.Messages, types.ChatMessage{
+							Role:       "tool",
+							Content:    toolOutput,
+							ToolCallID: toolCall.ID,
+						})
+					}
+				}
+
+				// If any unknown tool was present, return assistant message with tool calls
+				if unknownToolFound {
+					return assistantMsg, nil
+				}
+
+				// All tools were known, so call AI again recursively
+				return GenerateAIResponseWithTrace(sess, reasoning, searchOutput)
+			}
+
+			// No tool calls, return final content
+			return assistantMsg, nil
+		}
+
+		lastResponseBody = string(body)
+
+		if apiPath == "/chat/completions" && strings.Contains(lastResponseBody, "run on POST /v1/chat/") {
+			log.Printf("🔄 [AI] Dynamic route detected! Switching %s to /chat/...", actualModelID)
+			apiPath = "/chat/"
+			attempt--
+			continue
+		}
+
+		if strings.Contains(lastResponseBody, "concurrency limit exceeded") {
+			time.Sleep(2500 * time.Millisecond)
+			continue
+		}
+	}
+
+	return types.ChatMessage{}, fmt.Errorf("API failed across all keys: %s", lastResponseBody)
 }
-			
