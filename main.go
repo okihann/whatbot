@@ -16,7 +16,7 @@ import (
 	"bot/ai"
 	"bot/handlers"
 	"bot/ngrok"
-	_ "bot/commands/owner"
+	"bot/commands/owner"
 	_ "bot/commands/tool"
 
 	_ "modernc.org/sqlite"
@@ -50,6 +50,7 @@ func setupClient(deviceStore *store.Device) {
 			if v.Info.Timestamp.Before(botStartTime) {
 				return
 			}
+			owner.HandleAutomations(client, v)
 			handlers.HandleCommand(client, v)
 		}
 	})
