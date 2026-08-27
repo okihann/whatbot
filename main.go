@@ -159,45 +159,51 @@ func main() {
 	fmt.Println("==============================================================")
 
 	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			text := strings.ToLower(strings.TrimSpace(scanner.Text()))
-			switch text {
-			case "add":
-				setupClient(dbContainer.NewDevice())
-			case "list":
-				clientsMu.Lock()
-				fmt.Printf("\n--- Active Bot Accounts (%d) ---\n", len(activeClients))
-				for id := range activeClients {
-					fmt.Printf("📱 %s\n", id)
+			scanner := bufio.NewScanner(os.Stdin)
+			for scanner.Scan() {
+				text := strings.ToLower(strings.TrimSpace(scanner.Text()))
+
+				// --- 1. NEW REMOVE LOGIC GOES HERE (Before the switch) ---
+				if strings.HasPrefix(text, "remove ") {
+					target := strings.TrimSpace(strings.TrimPrefix(text, "remove"))
+					clientsMu.Lock()
+					if client, ok := activeClients[target]; ok {
+						client.Disconnect()
+						client.Store.Delete(context.Background()) // <-- FIX: Added context.Background()
+						delete(activeClients, target)
+						fmt.Printf("  [SUCCESS] Wiped and removed bot account: %s\n", target)
+					} else {
+						fmt.Printf("  [ERROR] ID '%s' not found. Type 'list' to see valid IDs.\n", target)
+					}
+					clientsMu.Unlock()
+					continue // Skip the switch below
 				}
-				fmt.Println("--------------------------------")
-				clientsMu.Unlock()
-			case strings.HasPrefix(text, "remove "): // <-- NEW CASE
-				target := strings.TrimSpace(strings.TrimPrefix(text, "remove"))
-				clientsMu.Lock()
-				if client, ok := activeClients[target]; ok {
-					client.Disconnect()
-					client.Store.Delete() // Removes the device from SQLite session.db
-					delete(activeClients, target)
-					fmt.Printf("  [SUCCESS] Wiped and removed bot account: %s\n", target)
-				} else {
-					fmt.Printf("  [ERROR] ID '%s' not found. Type 'list' to see valid IDs.\n", target)
-				}
-				clientsMu.Unlock()
-			case "ngrok on":
-				startNgrok()
-			case "ngrok off":
-				stopNgrok()
-			case "ngrok":
-				if publicTunnel.Enabled() {
-					fmt.Println("🌐 [NGROK] Tunnel is ON")
-				} else {
-					fmt.Println("🔒 [NGROK] Tunnel is OFF")
+
+				// --- 2. EXISTING SWITCH LOGIC REMAINS UNCHANGED ---
+				switch text {
+				case "add":
+					setupClient(dbContainer.NewDevice())
+				case "list":
+					clientsMu.Lock()
+					fmt.Printf("\n--- Active Bot Accounts (%d) ---\n", len(activeClients))
+					for id := range activeClients {
+						fmt.Printf("  %s\n", id)
+					}
+					fmt.Println("--------------------------------")
+					clientsMu.Unlock()
+				case "ngrok on":
+					startNgrok()
+				case "ngrok off":
+					stopNgrok()
+				case "ngrok":
+					if publicTunnel.Enabled() {
+						fmt.Println("  [NGROK] Tunnel is ON")
+					} else {
+						fmt.Println("  [NGROK] Tunnel is OFF")
+					}
 				}
 			}
-		}
-	}()
+		}()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
