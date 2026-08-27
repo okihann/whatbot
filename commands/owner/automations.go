@@ -174,7 +174,7 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 
 	// --- 1. ANTI-DELETE LOGIC ---
 	if msg.Message.GetProtocolMessage() != nil && msg.Message.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_REVOKE {
-		targetID := msg.Message.GetProtocolMessage().GetKey().GetId()
+		targetID := msg.Message.GetProtocolMessage().GetKey().GetID()
 
 		cacheMu.Lock()
 		cachedMsg, found := msgCache[targetID]
