@@ -152,8 +152,10 @@ jobs:
           test -s utils/bin/shazam-cli
 
       - name: Updating Whatsmeow dependencies
-        run: go get -u go.mau.fi/whatsmeow@latest
-
+        run: | 
+          go get github.com/ncruces/go-strftime@latest
+          go get go.mau.fi/whatsmeow@latest
+          
       - name: Resolve Go dependencies
         run: go mod tidy
 
