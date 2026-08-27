@@ -81,16 +81,19 @@ func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []stri
 		return
 	}
 
-	// 2. Command Execution
-	if len(args) == 0 {
+	// 2. Command Execution & Argument Splitting
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Usage: `/%s [on|off|add|remove] [number]`", feature))
 		return
 	}
 
-	action := strings.ToLower(args[0])
+	// Split the single argument string into separate words (e.g., "add 628999778909" -> ["add", "628999778909"])
+	parts := strings.Fields(args[0])
+	action := strings.ToLower(parts[0])
 	target := ""
-	if len(args) > 1 {
-		target = strings.TrimSpace(args[1])
+	
+	if len(parts) > 1 {
+		target = strings.TrimSpace(parts[1])
 	}
 
 	autoConf := db.LoadAutoConfig()
@@ -112,7 +115,7 @@ func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []stri
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("❌ *%s* is now OFF.", feature))
 	case "add":
 		if target == "" {
-			utils.SendReply(client, msg.Info.Chat, "Please provide a number to add.")
+			utils.SendReply(client, msg.Info.Chat, "Please provide a number to add. (e.g. `/"+feature+" add 628...`)")
 			return
 		}
 		if feature == "anti-delete" {
@@ -144,7 +147,10 @@ func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []stri
 			autoConf.AutoGetTargets = newList
 		}
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("🗑️ Removed `%s` from *%s* targets.", target, feature))
+	default:
+		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Unknown action: `%s`\nUsage: `/%s [on|off|add|remove] [number]`", action, feature))
 	}
+	
 	db.SaveAutoConfig()
 }
 
