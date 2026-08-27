@@ -123,11 +123,17 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build tools based on user toggle
-	var tools []interface{}
-	tools = append(tools, RunCommandTool, UnzipTool)
-	if req.WebSearchEnabled {
-		tools = append(tools, WebSearchTool)
+	// Use tools from request if provided; otherwise fall back to defaults
+	var tools interface{}
+	if req.Tools != nil {
+		tools = req.Tools
+	} else {
+		// Existing default tools (backward compatibility)
+		defaultTools := []interface{}{RunCommandTool, UnzipTool}
+		if req.WebSearchEnabled {
+			defaultTools = append(defaultTools, WebSearchTool)
+		}
+		tools = defaultTools
 	}
 
 	session := &types.AISession{
@@ -148,12 +154,14 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	var processBuilder strings.Builder
 	var searchOutputBuilder strings.Builder
 
-	aiResponse, err := GenerateAIResponseWithTrace(session, &processBuilder, &searchOutputBuilder)
+	// GenerateAIResponseWithTrace now returns a ChatMessage (may include ToolCalls)
+	assistantMsg, err := GenerateAIResponseWithTrace(session, &processBuilder, &searchOutputBuilder)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": {"message": "%s"}}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
 
+	// Embed process and search output into the assistant message content
 	var finalContent strings.Builder
 	if processBuilder.Len() > 0 {
 		finalContent.WriteString("<process>")
@@ -165,7 +173,10 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		finalContent.WriteString(searchOutputBuilder.String())
 		finalContent.WriteString("</search_output>\n")
 	}
-	finalContent.WriteString(aiResponse)
+	finalContent.WriteString(assistantMsg.Content)
+
+	// Update assistant message content with embedded process/search
+	assistantMsg.Content = finalContent.String()
 
 	timestamp := time.Now().Unix()
 	baseID := fmt.Sprintf("chatcmpl-%d", timestamp)
@@ -178,7 +189,7 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		Choices: []types.OpenAIChoice{
 			{
 				Index:        0,
-				Message:      types.ChatMessage{Role: "assistant", Content: finalContent.String()},
+				Message:      assistantMsg,
 				FinishReason: "stop",
 			},
 		},
