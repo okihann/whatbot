@@ -31,27 +31,46 @@ func init() {
 
 // --- HELPER FUNCTIONS ---
 
-func contains(slice []string, val string) bool {
-	for _, item := range slice {
-		if item == val {
+func isTargeted(targets []string, num string) bool {
+	for _, t := range targets {
+		if t == num || t == "all" {
 			return true
 		}
 	}
 	return false
 }
 
+// resolvePN converts a Local ID (LID) into a Phone Number (PN) so matching works flawlessly.
+func resolvePN(client *whatsmeow.Client, jid waTypes.JID) string {
+	nonAD := jid.ToNonAD()
+	if nonAD.Server == "lid" {
+		pn, err := client.Store.LIDs.GetPNForLID(context.Background(), nonAD)
+		if err == nil && pn.User != "" {
+			return pn.User // Returns just the number (e.g. 628999...)
+		}
+	}
+	return nonAD.User // .User cleanly strips the @s.whatsapp.net part
+}
+
+// Deep unwrap to extract core media out of ViewOnce, Ephemeral, and Documents
 func unwrapMessage(msg *waE2E.Message) *waE2E.Message {
 	if msg == nil {
 		return nil
 	}
-	if msg.EphemeralMessage != nil {
+	if msg.EphemeralMessage != nil && msg.EphemeralMessage.Message != nil {
 		return unwrapMessage(msg.EphemeralMessage.Message)
 	}
-	if msg.ViewOnceMessage != nil {
+	if msg.ViewOnceMessage != nil && msg.ViewOnceMessage.Message != nil {
 		return unwrapMessage(msg.ViewOnceMessage.Message)
 	}
-	if msg.ViewOnceMessageV2 != nil {
+	if msg.ViewOnceMessageV2 != nil && msg.ViewOnceMessageV2.Message != nil {
 		return unwrapMessage(msg.ViewOnceMessageV2.Message)
+	}
+	if msg.ViewOnceMessageV2Extension != nil && msg.ViewOnceMessageV2Extension.Message != nil {
+		return unwrapMessage(msg.ViewOnceMessageV2Extension.Message)
+	}
+	if msg.DocumentWithCaptionMessage != nil && msg.DocumentWithCaptionMessage.Message != nil {
+		return unwrapMessage(msg.DocumentWithCaptionMessage.Message)
 	}
 	return msg
 }
@@ -59,7 +78,6 @@ func unwrapMessage(msg *waE2E.Message) *waE2E.Message {
 // --- COMMAND LOGIC (STRICT OWNER ONLY) ---
 
 func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []string, feature string) {
-	// 1. Strict Owner Verification
 	conf, err := config.LoadConfig()
 	if err != nil {
 		return
@@ -67,7 +85,8 @@ func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []stri
 
 	isOwner := msg.Info.IsFromMe
 	if !isOwner {
-		senderNum := strings.Split(msg.Info.Sender.ToNonAD().String(), "@")[0]
+		// Use our new resolvePN helper for the owner check too!
+		senderNum := resolvePN(client, msg.Info.Sender)
 		for _, ownerNum := range conf.Settings.OwnerJIDs {
 			if senderNum == ownerNum {
 				isOwner = true
@@ -81,17 +100,15 @@ func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []stri
 		return
 	}
 
-	// 2. Command Execution & Argument Splitting
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
-		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Usage: `/%s [on|off|add|remove] [number]`", feature))
+		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Usage: `/%s [on|off|add|remove|list] [number/all]`", feature))
 		return
 	}
 
-	// Split the single argument string into separate words (e.g., "add 628999778909" -> ["add", "628999778909"])
 	parts := strings.Fields(args[0])
 	action := strings.ToLower(parts[0])
 	target := ""
-	
+
 	if len(parts) > 1 {
 		target = strings.TrimSpace(parts[1])
 	}
@@ -99,6 +116,12 @@ func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []stri
 	autoConf := db.LoadAutoConfig()
 
 	switch action {
+	case "list":
+		if feature == "anti-delete" {
+			utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("📋 *Anti-Delete Status*\n*Global Switch:* %v\n*Targets:* %v", autoConf.AntiDeleteOn, autoConf.AntiDeleteTargets))
+		} else {
+			utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("📋 *Auto-Get Status*\n*Global Switch:* %v\n*Targets:* %v", autoConf.AutoGetOn, autoConf.AutoGetTargets))
+		}
 	case "on":
 		if feature == "anti-delete" {
 			autoConf.AntiDeleteOn = true
@@ -115,15 +138,15 @@ func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []stri
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("❌ *%s* is now OFF.", feature))
 	case "add":
 		if target == "" {
-			utils.SendReply(client, msg.Info.Chat, "Please provide a number to add. (e.g. `/"+feature+" add 628...`)")
+			utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Please provide a number to add. (e.g. `/%s add all` or `/%s add 628...`)", feature, feature))
 			return
 		}
 		if feature == "anti-delete" {
-			if !contains(autoConf.AntiDeleteTargets, target) {
+			if !isTargeted(autoConf.AntiDeleteTargets, target) {
 				autoConf.AntiDeleteTargets = append(autoConf.AntiDeleteTargets, target)
 			}
 		} else {
-			if !contains(autoConf.AutoGetTargets, target) {
+			if !isTargeted(autoConf.AutoGetTargets, target) {
 				autoConf.AutoGetTargets = append(autoConf.AutoGetTargets, target)
 			}
 		}
@@ -148,9 +171,9 @@ func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []stri
 		}
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("🗑️ Removed `%s` from *%s* targets.", target, feature))
 	default:
-		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Unknown action: `%s`\nUsage: `/%s [on|off|add|remove] [number]`", action, feature))
+		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Unknown action: `%s`\nUsage: `/%s [on|off|add|remove|list] [number]`", action, feature))
 	}
-	
+
 	db.SaveAutoConfig()
 }
 
@@ -165,6 +188,10 @@ func executeAutoGet(client *whatsmeow.Client, msg *events.Message, args []string
 // --- EVENT INTERCEPTOR (THE BACKGROUND WORKER) ---
 
 func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
+	if msg.Message == nil {
+		return
+	}
+
 	botConf, _ := config.LoadConfig()
 	if len(botConf.Settings.OwnerJIDs) == 0 {
 		return
@@ -180,16 +207,17 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 
 	// --- 1. ANTI-DELETE LOGIC ---
 	if msg.Message.GetProtocolMessage() != nil && msg.Message.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_REVOKE {
-		targetID := msg.Message.GetProtocolMessage().GetKey().GetID()
+		targetID := msg.Message.GetProtocolMessage().GetKey().GetId()
 
 		cacheMu.Lock()
 		cachedMsg, found := msgCache[targetID]
 		cacheMu.Unlock()
 
 		if found && autoConf.AntiDeleteOn {
-			senderNum := strings.Split(cachedMsg.Info.Sender.ToNonAD().String(), "@")[0]
+			// FIX: Resolve the cached sender LID back to a real number
+			senderNum := resolvePN(client, cachedMsg.Info.Sender)
 
-			if contains(autoConf.AntiDeleteTargets, senderNum) {
+			if isTargeted(autoConf.AntiDeleteTargets, senderNum) {
 				chatName := "Private Chat"
 				if cachedMsg.Info.IsGroup {
 					chatName = fmt.Sprintf("Group (%s)", cachedMsg.Info.Chat.String())
@@ -197,7 +225,9 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 
 				alert := fmt.Sprintf("🚨 *Anti-Delete Triggered*\n*Target:* %s\n*Chat:* %s\n\n_Recovered Message:_ ", senderNum, chatName)
 				utils.SendReply(client, ownerJID, alert)
-				client.SendMessage(context.Background(), ownerJID, cachedMsg.Message)
+				
+				coreMsg := unwrapMessage(cachedMsg.Message)
+				client.SendMessage(context.Background(), ownerJID, coreMsg)
 			}
 		}
 		return
@@ -218,9 +248,10 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 
 	// --- 2. AUTO-GET LOGIC ---
 	if !msg.Info.IsGroup && !msg.Info.IsFromMe && autoConf.AutoGetOn {
-		senderNum := strings.Split(msg.Info.Sender.ToNonAD().String(), "@")[0]
+		// FIX: Resolve the incoming sender LID back to a real number
+		senderNum := resolvePN(client, msg.Info.Sender)
 
-		if contains(autoConf.AutoGetTargets, senderNum) {
+		if isTargeted(autoConf.AutoGetTargets, senderNum) {
 			coreMsg := unwrapMessage(msg.Message)
 			isMedia := coreMsg.GetImageMessage() != nil || coreMsg.GetVideoMessage() != nil || coreMsg.GetAudioMessage() != nil || coreMsg.GetDocumentMessage() != nil || coreMsg.GetStickerMessage() != nil
 
@@ -233,7 +264,7 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 
 // --- MEDIA PROCESSOR ---
 
-func processAutoGet(client *whatsmeow.Client, coreMsg *waE2E.Message, ownerJID waTypes.JID, sender string) {
+func processAutoGet(client *whatsmeow.Client, coreMsg *waE2E.Message, ownerJID waTypes.JID, senderNum string) {
 	var mediaType whatsmeow.MediaType
 	var data []byte
 	var err error
@@ -258,15 +289,17 @@ func processAutoGet(client *whatsmeow.Client, coreMsg *waE2E.Message, ownerJID w
 	}
 
 	if err != nil {
+		fmt.Printf("  [AUTO-GET] Download failed: %v\n", err)
 		return
 	}
 
 	uploaded, err := client.Upload(context.Background(), data, mediaType)
 	if err != nil {
+		fmt.Printf("  [AUTO-GET] Upload failed: %v\n", err)
 		return
 	}
 
-	caption := fmt.Sprintf("📥 *Auto-Get*\nReceived media from: %s", sender)
+	caption := fmt.Sprintf("📥 *Auto-Get*\nReceived media from: %s", senderNum)
 	var finalMsg waE2E.Message
 
 	if coreMsg.ImageMessage != nil {
@@ -326,5 +359,8 @@ func processAutoGet(client *whatsmeow.Client, coreMsg *waE2E.Message, ownerJID w
 		}
 	}
 
-	client.SendMessage(context.Background(), ownerJID, &finalMsg)
+	_, err = client.SendMessage(context.Background(), ownerJID, &finalMsg)
+	if err != nil {
+		fmt.Printf("  [AUTO-GET] Failed to forward to owner: %v\n", err)
+	}
 }
