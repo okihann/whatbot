@@ -153,7 +153,8 @@ jobs:
 
       - name: Updating Whatsmeow dependencies
         run: | 
-          go get github.com/ncruces/go-strftime@latest
+          go mod edit -droprequire=github.com/ncruces/go-strftime
+          go get modernc.org/sqlite@latest
           go get go.mau.fi/whatsmeow@latest
           
       - name: Resolve Go dependencies
