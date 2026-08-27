@@ -172,6 +172,18 @@ func main() {
 				}
 				fmt.Println("--------------------------------")
 				clientsMu.Unlock()
+			case strings.HasPrefix(text, "remove "): // <-- NEW CASE
+				target := strings.TrimSpace(strings.TrimPrefix(text, "remove"))
+				clientsMu.Lock()
+				if client, ok := activeClients[target]; ok {
+					client.Disconnect()
+					client.Store.Delete() // Removes the device from SQLite session.db
+					delete(activeClients, target)
+					fmt.Printf("  [SUCCESS] Wiped and removed bot account: %s\n", target)
+				} else {
+					fmt.Printf("  [ERROR] ID '%s' not found. Type 'list' to see valid IDs.\n", target)
+				}
+				clientsMu.Unlock()
 			case "ngrok on":
 				startNgrok()
 			case "ngrok off":
