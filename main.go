@@ -26,6 +26,8 @@ import (
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types/events"
+	"go.mau.fi/whatsmeow/proto/waCompanionReg"
+	"google.golang.org/protobuf/proto"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
@@ -41,6 +43,11 @@ var (
 func setupClient(deviceStore *store.Device) {
 	clientLog := waLog.Stdout("Client", "INFO", true)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
+
+	if client.Store.DeviceProps != nil {
+		client.Store.DeviceProps.Os = proto.String("Mac OS")
+		client.Store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_SAFARI.Enum()
+	}
 
 	client.AddEventHandler(func(evt interface{}) {
 		switch v := evt.(type) {
