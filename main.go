@@ -44,11 +44,11 @@ func setupClient(deviceStore *store.Device) {
 	clientLog := waLog.Stdout("Client", "INFO", true)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
 
-	if client.Store.DeviceProps != nil {
-		client.Store.DeviceProps.Os = proto.String("Mac OS")
-		client.Store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_SAFARI.Enum()
+	if store.DeviceProps != nil {
+		store.DeviceProps.Os = proto.String("iPadOS")
+		store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_IPAD.Enum()
 	}
-
+		
 	client.AddEventHandler(func(evt interface{}) {
 		switch v := evt.(type) {
 		case *events.Connected:
