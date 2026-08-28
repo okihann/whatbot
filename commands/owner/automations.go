@@ -40,19 +40,17 @@ func isTargeted(targets []string, num string) bool {
 	return false
 }
 
-// resolvePN converts a Local ID (LID) into a Phone Number (PN) so matching works flawlessly.
 func resolvePN(client *whatsmeow.Client, jid waTypes.JID) string {
 	nonAD := jid.ToNonAD()
 	if nonAD.Server == "lid" {
 		pn, err := client.Store.LIDs.GetPNForLID(context.Background(), nonAD)
 		if err == nil && pn.User != "" {
-			return pn.User // Returns just the number (e.g. 628999...)
+			return pn.User 
 		}
 	}
-	return nonAD.User // .User cleanly strips the @s.whatsapp.net part
+	return nonAD.User 
 }
 
-// Deep unwrap to extract core media out of ViewOnce, Ephemeral, and Documents
 func unwrapMessage(msg *waE2E.Message) *waE2E.Message {
 	if msg == nil {
 		return nil
@@ -85,7 +83,6 @@ func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []stri
 
 	isOwner := msg.Info.IsFromMe
 	if !isOwner {
-		// Use our new resolvePN helper for the owner check too!
 		senderNum := resolvePN(client, msg.Info.Sender)
 		for _, ownerNum := range conf.Settings.OwnerJIDs {
 			if senderNum == ownerNum {
@@ -214,7 +211,6 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		cacheMu.Unlock()
 
 		if found && autoConf.AntiDeleteOn {
-			// FIX: Resolve the cached sender LID back to a real number
 			senderNum := resolvePN(client, cachedMsg.Info.Sender)
 
 			if isTargeted(autoConf.AntiDeleteTargets, senderNum) {
@@ -223,11 +219,45 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 					chatName = fmt.Sprintf("Group (%s)", cachedMsg.Info.Chat.String())
 				}
 
-				alert := fmt.Sprintf("🚨 *Anti-Delete Triggered*\n*Target:* %s\n*Chat:* %s\n\n_Recovered Message:_ ", senderNum, chatName)
-				utils.SendReply(client, ownerJID, alert)
-				
+				// The formatted alert text
+				alertText := fmt.Sprintf("🚨 *Anti-Delete Triggered*\n*Target:* %s\n*Chat:* %s\n\n_Recovered Message:_\n", senderNum, chatName)
 				coreMsg := unwrapMessage(cachedMsg.Message)
-				client.SendMessage(context.Background(), ownerJID, coreMsg)
+
+				// Determine if it's purely a text message
+				isText := coreMsg.Conversation != nil || coreMsg.ExtendedTextMessage != nil
+				
+				// Inject the alert text directly into the message body or caption
+				if isText && coreMsg.ImageMessage == nil && coreMsg.VideoMessage == nil && coreMsg.DocumentMessage == nil && coreMsg.AudioMessage == nil && coreMsg.StickerMessage == nil {
+					originalText := utils.GetTextFromMessage(cachedMsg.Message)
+					finalText := alertText + originalText
+					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{
+						ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+							Text: proto.String(finalText),
+						},
+					})
+				} else if coreMsg.ImageMessage != nil {
+					img := proto.Clone(coreMsg.ImageMessage).(*waE2E.ImageMessage)
+					origCap := ""
+					if img.Caption != nil { origCap = *img.Caption }
+					img.Caption = proto.String(alertText + origCap)
+					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{ImageMessage: img})
+				} else if coreMsg.VideoMessage != nil {
+					vid := proto.Clone(coreMsg.VideoMessage).(*waE2E.VideoMessage)
+					origCap := ""
+					if vid.Caption != nil { origCap = *vid.Caption }
+					vid.Caption = proto.String(alertText + origCap)
+					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{VideoMessage: vid})
+				} else if coreMsg.DocumentMessage != nil {
+					doc := proto.Clone(coreMsg.DocumentMessage).(*waE2E.DocumentMessage)
+					origCap := ""
+					if doc.Caption != nil { origCap = *doc.Caption }
+					doc.Caption = proto.String(alertText + origCap)
+					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{DocumentMessage: doc})
+				} else {
+					// Fallback for Stickers & Audio (They don't support captions)
+					utils.SendReply(client, ownerJID, alertText)
+					client.SendMessage(context.Background(), ownerJID, coreMsg)
+				}
 			}
 		}
 		return
@@ -248,7 +278,6 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 
 	// --- 2. AUTO-GET LOGIC ---
 	if !msg.Info.IsGroup && !msg.Info.IsFromMe && autoConf.AutoGetOn {
-		// FIX: Resolve the incoming sender LID back to a real number
 		senderNum := resolvePN(client, msg.Info.Sender)
 
 		if isTargeted(autoConf.AutoGetTargets, senderNum) {
