@@ -237,8 +237,12 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 			senderNum := resolvePN(client, cachedMsg.Info.Sender)
 
 			if isTargeted(autoConf.AntiDeleteTargets, senderNum) {
+				
+				// FEATURE UPDATE: Accurately label Statuses, Groups, and DMs
 				chatName := "Private Chat"
-				if cachedMsg.Info.IsGroup {
+				if cachedMsg.Info.Chat.Server == "broadcast" {
+					chatName = "WhatsApp Status"
+				} else if cachedMsg.Info.IsGroup {
 					chatName = fmt.Sprintf("Group (%s)", cachedMsg.Info.Chat.String())
 				}
 
@@ -288,7 +292,7 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		return
 	}
 
-	// Cache direct incoming messages for 24 hours
+	// Cache direct incoming messages (and statuses) for 24 hours
 	if msg.Info.ID != "" {
 		cacheMu.Lock()
 		msgCache[msg.Info.ID] = msg
@@ -307,16 +311,13 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		quotedID := *ctxInfo.StanzaID
 		quotedMedia := unwrapMessage(ctxInfo.QuotedMessage)
 
-		// Correctly determine who authored the quoted message in both DMs and Groups
 		var quotedSenderJID waTypes.JID
 		if ctxInfo.Participant != nil && *ctxInfo.Participant != "" {
 			quotedSenderJID, _ = waTypes.ParseJID(*ctxInfo.Participant)
 		} else if !msg.Info.IsGroup {
 			if msg.Info.IsFromMe {
-				// If you replied in a DM, the quoted message belongs to your chat partner
 				quotedSenderJID = msg.Info.Chat
 			} else {
-				// If your chat partner replied in a DM, the quoted message belongs to you
 				quotedSenderJID = msg.Info.Sender
 			}
 		} else {
@@ -325,7 +326,6 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 
 		quotedSenderNum := resolvePN(client, quotedSenderJID)
 
-		// A. Enrich cache with media payload from quoted message metadata
 		cacheMu.Lock()
 		if existing, found := msgCache[quotedID]; found {
 			existing.Message = quotedMedia
@@ -346,13 +346,11 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		alreadyGotten := autoGetDoneCache[quotedID]
 		cacheMu.Unlock()
 
-		// B. Trigger Auto-Get on any reply to target media
 		if autoConf.AutoGetOn && !alreadyGotten && isTargeted(autoConf.AutoGetTargets, quotedSenderNum) {
 			isMedia := quotedMedia.GetImageMessage() != nil ||
 				quotedMedia.GetVideoMessage() != nil ||
 				quotedMedia.GetAudioMessage() != nil ||
-				quotedMedia.GetDocumentMessage() != nil ||
-				quotedMedia.GetStickerMessage() != nil
+				quotedMedia.GetDocumentMessage() != nil
 
 			if isMedia {
 				cacheMu.Lock()
@@ -365,12 +363,17 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 	}
 
 	// --- 3. DIRECT INCOMING MEDIA AUTO-GET LOGIC ---
-	if !msg.Info.IsGroup && !msg.Info.IsFromMe && autoConf.AutoGetOn {
+	// BUGFIX: Added `msg.Info.Chat.Server != "broadcast"` so it doesn't auto-download every status
+	if !msg.Info.IsGroup && msg.Info.Chat.Server != "broadcast" && !msg.Info.IsFromMe && autoConf.AutoGetOn {
 		senderNum := resolvePN(client, msg.Info.Sender)
 
 		if isTargeted(autoConf.AutoGetTargets, senderNum) {
 			coreMsg := unwrapMessage(msg.Message)
-			isMedia := coreMsg.GetImageMessage() != nil || coreMsg.GetVideoMessage() != nil || coreMsg.GetAudioMessage() != nil || coreMsg.GetDocumentMessage() != nil || coreMsg.GetStickerMessage() != nil
+			
+			isMedia := coreMsg.GetImageMessage() != nil || 
+				coreMsg.GetVideoMessage() != nil || 
+				coreMsg.GetAudioMessage() != nil || 
+				coreMsg.GetDocumentMessage() != nil
 
 			cacheMu.Lock()
 			alreadyGotten := autoGetDoneCache[msg.Info.ID]
@@ -386,7 +389,6 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		}
 	}
 }
-
 // --- MEDIA PROCESSOR ---
 
 func processAutoGet(client *whatsmeow.Client, coreMsg *waE2E.Message, ownerJID waTypes.JID, senderNum string) {
