@@ -266,6 +266,7 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 						origCap = *img.Caption
 					}
 					img.Caption = proto.String(alertText + origCap)
+					img.ViewOnce = proto.Bool(false)
 					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{ImageMessage: img})
 				} else if coreMsg.VideoMessage != nil {
 					vid := proto.Clone(coreMsg.VideoMessage).(*waE2E.VideoMessage)
@@ -274,6 +275,7 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 						origCap = *vid.Caption
 					}
 					vid.Caption = proto.String(alertText + origCap)
+					img.ViewOnce = proto.Bool(false)
 					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{VideoMessage: vid})
 				} else if coreMsg.DocumentMessage != nil {
 					doc := proto.Clone(coreMsg.DocumentMessage).(*waE2E.DocumentMessage)
@@ -389,105 +391,57 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		}
 	}
 }
-// --- MEDIA PROCESSOR ---
 
 func processAutoGet(client *whatsmeow.Client, coreMsg *waE2E.Message, ownerJID waTypes.JID, senderNum string) {
-	var mediaType whatsmeow.MediaType
-	var data []byte
-	var err error
+	captionHeader := fmt.Sprintf("📥 *Auto-Get*\nReceived media from: %s\n\n", senderNum)
 
 	if coreMsg.ImageMessage != nil {
-		mediaType = whatsmeow.MediaImage
-		data, err = client.Download(context.Background(), coreMsg.ImageMessage)
+		img := proto.Clone(coreMsg.ImageMessage).(*waE2E.ImageMessage)
+		if img.Caption != nil {
+			img.Caption = proto.String(captionHeader + *img.Caption)
+		} else {
+			img.Caption = proto.String(strings.TrimSpace(captionHeader))
+		}
+		// The Magic Bullet: Strip the self-destruct flag
+		img.ViewOnce = proto.Bool(false)
+		
+		_, err := client.SendMessage(context.Background(), ownerJID, &waE2E.Message{ImageMessage: img})
+		if err != nil {
+			fmt.Printf("  [AUTO-GET] Failed to route image: %v\n", err)
+		}
+
 	} else if coreMsg.VideoMessage != nil {
-		mediaType = whatsmeow.MediaVideo
-		data, err = client.Download(context.Background(), coreMsg.VideoMessage)
+		vid := proto.Clone(coreMsg.VideoMessage).(*waE2E.VideoMessage)
+		if vid.Caption != nil {
+			vid.Caption = proto.String(captionHeader + *vid.Caption)
+		} else {
+			vid.Caption = proto.String(strings.TrimSpace(captionHeader))
+		}
+		// The Magic Bullet: Strip the self-destruct flag
+		vid.ViewOnce = proto.Bool(false)
+		
+		_, err := client.SendMessage(context.Background(), ownerJID, &waE2E.Message{VideoMessage: vid})
+		if err != nil {
+			fmt.Printf("  [AUTO-GET] Failed to route video: %v\n", err)
+		}
+
 	} else if coreMsg.AudioMessage != nil {
-		mediaType = whatsmeow.MediaAudio
-		data, err = client.Download(context.Background(), coreMsg.AudioMessage)
+		aud := proto.Clone(coreMsg.AudioMessage).(*waE2E.AudioMessage)
+		_, err := client.SendMessage(context.Background(), ownerJID, &waE2E.Message{AudioMessage: aud})
+		if err != nil {
+			fmt.Printf("  [AUTO-GET] Failed to route audio: %v\n", err)
+		}
+
 	} else if coreMsg.DocumentMessage != nil {
-		mediaType = whatsmeow.MediaDocument
-		data, err = client.Download(context.Background(), coreMsg.DocumentMessage)
-	} else if coreMsg.StickerMessage != nil {
-		mediaType = whatsmeow.MediaImage
-		data, err = client.Download(context.Background(), coreMsg.StickerMessage)
-	} else {
-		return
-	}
-
-	if err != nil {
-		fmt.Printf("  [AUTO-GET] Download failed: %v\n", err)
-		return
-	}
-
-	uploaded, err := client.Upload(context.Background(), data, mediaType)
-	if err != nil {
-		fmt.Printf("  [AUTO-GET] Upload failed: %v\n", err)
-		return
-	}
-
-	caption := fmt.Sprintf("📥 *Auto-Get*\nReceived media from: %s", senderNum)
-	var finalMsg waE2E.Message
-
-	if coreMsg.ImageMessage != nil {
-		finalMsg.ImageMessage = &waE2E.ImageMessage{
-			URL:           proto.String(uploaded.URL),
-			DirectPath:    proto.String(uploaded.DirectPath),
-			MediaKey:      uploaded.MediaKey,
-			Mimetype:      coreMsg.ImageMessage.Mimetype,
-			FileEncSHA256: uploaded.FileEncSHA256,
-			FileSHA256:    uploaded.FileSHA256,
-			FileLength:    proto.Uint64(uploaded.FileLength),
-			Caption:       proto.String(caption),
+		doc := proto.Clone(coreMsg.DocumentMessage).(*waE2E.DocumentMessage)
+		if doc.Caption != nil {
+			doc.Caption = proto.String(captionHeader + *doc.Caption)
+		} else {
+			doc.Caption = proto.String(strings.TrimSpace(captionHeader))
 		}
-	} else if coreMsg.VideoMessage != nil {
-		finalMsg.VideoMessage = &waE2E.VideoMessage{
-			URL:           proto.String(uploaded.URL),
-			DirectPath:    proto.String(uploaded.DirectPath),
-			MediaKey:      uploaded.MediaKey,
-			Mimetype:      coreMsg.VideoMessage.Mimetype,
-			FileEncSHA256: uploaded.FileEncSHA256,
-			FileSHA256:    uploaded.FileSHA256,
-			FileLength:    proto.Uint64(uploaded.FileLength),
-			Caption:       proto.String(caption),
+		_, err := client.SendMessage(context.Background(), ownerJID, &waE2E.Message{DocumentMessage: doc})
+		if err != nil {
+			fmt.Printf("  [AUTO-GET] Failed to route document: %v\n", err)
 		}
-	} else if coreMsg.AudioMessage != nil {
-		finalMsg.AudioMessage = &waE2E.AudioMessage{
-			URL:           proto.String(uploaded.URL),
-			DirectPath:    proto.String(uploaded.DirectPath),
-			MediaKey:      uploaded.MediaKey,
-			Mimetype:      coreMsg.AudioMessage.Mimetype,
-			FileEncSHA256: uploaded.FileEncSHA256,
-			FileSHA256:    uploaded.FileSHA256,
-			FileLength:    proto.Uint64(uploaded.FileLength),
-			PTT:           coreMsg.AudioMessage.PTT,
-		}
-	} else if coreMsg.DocumentMessage != nil {
-		finalMsg.DocumentMessage = &waE2E.DocumentMessage{
-			URL:           proto.String(uploaded.URL),
-			DirectPath:    proto.String(uploaded.DirectPath),
-			MediaKey:      uploaded.MediaKey,
-			Mimetype:      coreMsg.DocumentMessage.Mimetype,
-			FileName:      coreMsg.DocumentMessage.FileName,
-			FileEncSHA256: uploaded.FileEncSHA256,
-			FileSHA256:    uploaded.FileSHA256,
-			FileLength:    proto.Uint64(uploaded.FileLength),
-			Caption:       proto.String(caption),
-		}
-	} else if coreMsg.StickerMessage != nil {
-		finalMsg.StickerMessage = &waE2E.StickerMessage{
-			URL:           proto.String(uploaded.URL),
-			DirectPath:    proto.String(uploaded.DirectPath),
-			MediaKey:      uploaded.MediaKey,
-			Mimetype:      coreMsg.StickerMessage.Mimetype,
-			FileEncSHA256: uploaded.FileEncSHA256,
-			FileSHA256:    uploaded.FileSHA256,
-			FileLength:    proto.Uint64(uploaded.FileLength),
-		}
-	}
-
-	_, err = client.SendMessage(context.Background(), ownerJID, &finalMsg)
-	if err != nil {
-		fmt.Printf("  [AUTO-GET] Failed to forward to owner: %v\n", err)
 	}
 }
