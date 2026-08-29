@@ -212,16 +212,10 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		return
 	}
 
-	botConf, _ := config.LoadConfig()
-	if len(botConf.Settings.OwnerJIDs) == 0 {
+	if client.Store.ID == nil {
 		return
 	}
-
-	ownerStr := botConf.Settings.OwnerJIDs[0]
-	if !strings.Contains(ownerStr, "@") {
-		ownerStr += "@s.whatsapp.net"
-	}
-	ownerJID, _ := waTypes.ParseJID(ownerStr)
+	ownerJID := client.Store.ID.ToNonAD()
 
 	autoConf := db.LoadAutoConfig()
 
