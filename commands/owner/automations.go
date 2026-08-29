@@ -141,7 +141,11 @@ func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []stri
 		target = strings.TrimSpace(parts[1])
 	}
 
-	autoConf := db.LoadAutoConfig()
+	if client.Store.ID == nil {
+		return
+	}
+	botID := client.Store.ID.ToNonAD().User
+	autoConf := db.GetAutoConfig(botID)
 
 	switch action {
 	case "list":
@@ -224,8 +228,9 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		return
 	}
 	ownerJID := client.Store.ID.ToNonAD()
-
-	autoConf := db.LoadAutoConfig()
+	botID := ownerJID.User
+	
+	autoConf := db.GetAutoConfig(botID)
 
 	// --- 1. ANTI-DELETE TRIGGER ---
 	if msg.Message.GetProtocolMessage() != nil && msg.Message.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_REVOKE {
