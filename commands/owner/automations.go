@@ -301,38 +301,39 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		}(msg.Info.ID)
 	}
 
-	// --- 2. QUOTE INSPECTOR (NO-PREFIX AUTO-GET & CACHE ENRICHER) ---
+	// --- 2. QUOTE INSPECTOR (FIXED FOR 1-ON-1 PRIVATE CHATS) ---
 	ctxInfo := extractContextInfo(msg.Message)
 	if ctxInfo != nil && ctxInfo.QuotedMessage != nil && ctxInfo.StanzaID != nil {
 		quotedID := *ctxInfo.StanzaID
 		quotedMedia := unwrapMessage(ctxInfo.QuotedMessage)
 
-		var quotedSenderNum string
-		if ctxInfo.Participant != nil {
-			parsedP, err := waTypes.ParseJID(*ctxInfo.Participant)
-			if err == nil {
-				quotedSenderNum = resolvePN(client, parsedP)
+		// Correctly determine who authored the quoted message in both DMs and Groups
+		var quotedSenderJID waTypes.JID
+		if ctxInfo.Participant != nil && *ctxInfo.Participant != "" {
+			quotedSenderJID, _ = waTypes.ParseJID(*ctxInfo.Participant)
+		} else if !msg.Info.IsGroup {
+			if msg.Info.IsFromMe {
+				// If you replied in a DM, the quoted message belongs to your chat partner
+				quotedSenderJID = msg.Info.Chat
+			} else {
+				// If your chat partner replied in a DM, the quoted message belongs to you
+				quotedSenderJID = msg.Info.Sender
 			}
+		} else {
+			quotedSenderJID = msg.Info.Sender
 		}
-		if quotedSenderNum == "" {
-			quotedSenderNum = resolvePN(client, msg.Info.Sender)
-		}
+
+		quotedSenderNum := resolvePN(client, quotedSenderJID)
 
 		// A. Enrich cache with media payload from quoted message metadata
 		cacheMu.Lock()
 		if existing, found := msgCache[quotedID]; found {
 			existing.Message = quotedMedia
 		} else {
-			var participantJID waTypes.JID
-			if ctxInfo.Participant != nil {
-				participantJID, _ = waTypes.ParseJID(*ctxInfo.Participant)
-			} else {
-				participantJID = msg.Info.Sender
-			}
 			msgCache[quotedID] = &events.Message{
 				Info: waTypes.MessageInfo{
-					MessageSource: waTypes.MessageSource{ // <-- Added this embedded struct call
-						Sender:  participantJID,
+					MessageSource: waTypes.MessageSource{
+						Sender:  quotedSenderJID,
 						Chat:    msg.Info.Chat,
 						IsGroup: msg.Info.IsGroup,
 					},
