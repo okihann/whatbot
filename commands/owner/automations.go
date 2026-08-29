@@ -227,7 +227,7 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 
 	// --- 1. ANTI-DELETE TRIGGER ---
 	if msg.Message.GetProtocolMessage() != nil && msg.Message.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_REVOKE {
-		targetID := msg.Message.GetProtocolMessage().GetKey().GetId()
+		targetID := msg.Message.GetProtocolMessage().GetKey().GetID()
 
 		cacheMu.Lock()
 		cachedMsg, found := msgCache[targetID]
@@ -331,10 +331,12 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 			}
 			msgCache[quotedID] = &events.Message{
 				Info: waTypes.MessageInfo{
+					MessageSource: waTypes.MessageSource{ // <-- Added this embedded struct call
+						Sender:  participantJID,
+						Chat:    msg.Info.Chat,
+						IsGroup: msg.Info.IsGroup,
+					},
 					ID:        quotedID,
-					Sender:    participantJID,
-					Chat:      msg.Info.Chat,
-					IsGroup:   msg.Info.IsGroup,
 					Timestamp: msg.Info.Timestamp,
 				},
 				Message: quotedMedia,
