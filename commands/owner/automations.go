@@ -266,7 +266,7 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 						origCap = *img.Caption
 					}
 					img.Caption = proto.String(alertText + origCap)
-					img.ViewOnce = proto.Bool(false)
+					// img.ViewOnce = proto.Bool(false)
 					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{ImageMessage: img})
 				} else if coreMsg.VideoMessage != nil {
 					vid := proto.Clone(coreMsg.VideoMessage).(*waE2E.VideoMessage)
@@ -275,7 +275,7 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 						origCap = *vid.Caption
 					}
 					vid.Caption = proto.String(alertText + origCap)
-					vid.ViewOnce = proto.Bool(false)
+					// vid.ViewOnce = proto.Bool(false)
 					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{VideoMessage: vid})
 				} else if coreMsg.DocumentMessage != nil {
 					doc := proto.Clone(coreMsg.DocumentMessage).(*waE2E.DocumentMessage)
@@ -403,7 +403,7 @@ func processAutoGet(client *whatsmeow.Client, coreMsg *waE2E.Message, ownerJID w
 			img.Caption = proto.String(strings.TrimSpace(captionHeader))
 		}
 		// The Magic Bullet: Strip the self-destruct flag
-		img.ViewOnce = proto.Bool(false)
+		// img.ViewOnce = proto.Bool(false)
 		
 		_, err := client.SendMessage(context.Background(), ownerJID, &waE2E.Message{ImageMessage: img})
 		if err != nil {
@@ -418,7 +418,7 @@ func processAutoGet(client *whatsmeow.Client, coreMsg *waE2E.Message, ownerJID w
 			vid.Caption = proto.String(strings.TrimSpace(captionHeader))
 		}
 		// The Magic Bullet: Strip the self-destruct flag
-		vid.ViewOnce = proto.Bool(false)
+		// vid.ViewOnce = proto.Bool(false)
 		
 		_, err := client.SendMessage(context.Background(), ownerJID, &waE2E.Message{VideoMessage: vid})
 		if err != nil {
