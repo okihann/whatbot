@@ -20,8 +20,9 @@ import (
 )
 
 var (
-	msgCache = make(map[string]*events.Message)
-	cacheMu  sync.Mutex
+	msgCache         = make(map[string]*events.Message)
+	autoGetDoneCache = make(map[string]bool)
+	cacheMu          sync.Mutex
 )
 
 func init() {
@@ -45,10 +46,10 @@ func resolvePN(client *whatsmeow.Client, jid waTypes.JID) string {
 	if nonAD.Server == "lid" {
 		pn, err := client.Store.LIDs.GetPNForLID(context.Background(), nonAD)
 		if err == nil && pn.User != "" {
-			return pn.User 
+			return pn.User
 		}
 	}
-	return nonAD.User 
+	return nonAD.User
 }
 
 func unwrapMessage(msg *waE2E.Message) *waE2E.Message {
@@ -71,6 +72,28 @@ func unwrapMessage(msg *waE2E.Message) *waE2E.Message {
 		return unwrapMessage(msg.DocumentWithCaptionMessage.Message)
 	}
 	return msg
+}
+
+func extractContextInfo(msg *waE2E.Message) *waE2E.ContextInfo {
+	if msg == nil {
+		return nil
+	}
+	if ext := msg.GetExtendedTextMessage(); ext != nil {
+		return ext.GetContextInfo()
+	}
+	if img := msg.GetImageMessage(); img != nil {
+		return img.GetContextInfo()
+	}
+	if vid := msg.GetVideoMessage(); vid != nil {
+		return vid.GetContextInfo()
+	}
+	if aud := msg.GetAudioMessage(); aud != nil {
+		return aud.GetContextInfo()
+	}
+	if doc := msg.GetDocumentMessage(); doc != nil {
+		return doc.GetContextInfo()
+	}
+	return nil
 }
 
 // --- COMMAND LOGIC (STRICT OWNER ONLY) ---
@@ -202,9 +225,9 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 
 	autoConf := db.LoadAutoConfig()
 
-	// --- 1. ANTI-DELETE LOGIC ---
+	// --- 1. ANTI-DELETE TRIGGER ---
 	if msg.Message.GetProtocolMessage() != nil && msg.Message.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_REVOKE {
-		targetID := msg.Message.GetProtocolMessage().GetKey().GetID()
+		targetID := msg.Message.GetProtocolMessage().GetKey().GetId()
 
 		cacheMu.Lock()
 		cachedMsg, found := msgCache[targetID]
@@ -219,14 +242,11 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 					chatName = fmt.Sprintf("Group (%s)", cachedMsg.Info.Chat.String())
 				}
 
-				// The formatted alert text
 				alertText := fmt.Sprintf("🚨 *Anti-Delete Triggered*\n*Target:* %s\n*Chat:* %s\n\n_Recovered Message:_\n", senderNum, chatName)
 				coreMsg := unwrapMessage(cachedMsg.Message)
 
-				// Determine if it's purely a text message
 				isText := coreMsg.Conversation != nil || coreMsg.ExtendedTextMessage != nil
-				
-				// Inject the alert text directly into the message body or caption
+
 				if isText && coreMsg.ImageMessage == nil && coreMsg.VideoMessage == nil && coreMsg.DocumentMessage == nil && coreMsg.AudioMessage == nil && coreMsg.StickerMessage == nil {
 					originalText := utils.GetTextFromMessage(cachedMsg.Message)
 					finalText := alertText + originalText
@@ -238,23 +258,28 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 				} else if coreMsg.ImageMessage != nil {
 					img := proto.Clone(coreMsg.ImageMessage).(*waE2E.ImageMessage)
 					origCap := ""
-					if img.Caption != nil { origCap = *img.Caption }
+					if img.Caption != nil {
+						origCap = *img.Caption
+					}
 					img.Caption = proto.String(alertText + origCap)
 					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{ImageMessage: img})
 				} else if coreMsg.VideoMessage != nil {
 					vid := proto.Clone(coreMsg.VideoMessage).(*waE2E.VideoMessage)
 					origCap := ""
-					if vid.Caption != nil { origCap = *vid.Caption }
+					if vid.Caption != nil {
+						origCap = *vid.Caption
+					}
 					vid.Caption = proto.String(alertText + origCap)
 					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{VideoMessage: vid})
 				} else if coreMsg.DocumentMessage != nil {
 					doc := proto.Clone(coreMsg.DocumentMessage).(*waE2E.DocumentMessage)
 					origCap := ""
-					if doc.Caption != nil { origCap = *doc.Caption }
+					if doc.Caption != nil {
+						origCap = *doc.Caption
+					}
 					doc.Caption = proto.String(alertText + origCap)
 					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{DocumentMessage: doc})
 				} else {
-					// Fallback for Stickers & Audio (They don't support captions)
 					utils.SendReply(client, ownerJID, alertText)
 					client.SendMessage(context.Background(), ownerJID, coreMsg)
 				}
@@ -263,7 +288,7 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		return
 	}
 
-	// Always cache incoming messages for 24h
+	// Cache direct incoming messages for 24 hours
 	if msg.Info.ID != "" {
 		cacheMu.Lock()
 		msgCache[msg.Info.ID] = msg
@@ -276,7 +301,67 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		}(msg.Info.ID)
 	}
 
-	// --- 2. AUTO-GET LOGIC ---
+	// --- 2. QUOTE INSPECTOR (NO-PREFIX AUTO-GET & CACHE ENRICHER) ---
+	ctxInfo := extractContextInfo(msg.Message)
+	if ctxInfo != nil && ctxInfo.QuotedMessage != nil && ctxInfo.StanzaID != nil {
+		quotedID := *ctxInfo.StanzaID
+		quotedMedia := unwrapMessage(ctxInfo.QuotedMessage)
+
+		var quotedSenderNum string
+		if ctxInfo.Participant != nil {
+			parsedP, err := waTypes.ParseJID(*ctxInfo.Participant)
+			if err == nil {
+				quotedSenderNum = resolvePN(client, parsedP)
+			}
+		}
+		if quotedSenderNum == "" {
+			quotedSenderNum = resolvePN(client, msg.Info.Sender)
+		}
+
+		// A. Enrich cache with media payload from quoted message metadata
+		cacheMu.Lock()
+		if existing, found := msgCache[quotedID]; found {
+			existing.Message = quotedMedia
+		} else {
+			var participantJID waTypes.JID
+			if ctxInfo.Participant != nil {
+				participantJID, _ = waTypes.ParseJID(*ctxInfo.Participant)
+			} else {
+				participantJID = msg.Info.Sender
+			}
+			msgCache[quotedID] = &events.Message{
+				Info: waTypes.MessageInfo{
+					ID:        quotedID,
+					Sender:    participantJID,
+					Chat:      msg.Info.Chat,
+					IsGroup:   msg.Info.IsGroup,
+					Timestamp: msg.Info.Timestamp,
+				},
+				Message: quotedMedia,
+			}
+		}
+		alreadyGotten := autoGetDoneCache[quotedID]
+		cacheMu.Unlock()
+
+		// B. Trigger Auto-Get on any reply to target media
+		if autoConf.AutoGetOn && !alreadyGotten && isTargeted(autoConf.AutoGetTargets, quotedSenderNum) {
+			isMedia := quotedMedia.GetImageMessage() != nil ||
+				quotedMedia.GetVideoMessage() != nil ||
+				quotedMedia.GetAudioMessage() != nil ||
+				quotedMedia.GetDocumentMessage() != nil ||
+				quotedMedia.GetStickerMessage() != nil
+
+			if isMedia {
+				cacheMu.Lock()
+				autoGetDoneCache[quotedID] = true
+				cacheMu.Unlock()
+
+				go processAutoGet(client, quotedMedia, ownerJID, quotedSenderNum)
+			}
+		}
+	}
+
+	// --- 3. DIRECT INCOMING MEDIA AUTO-GET LOGIC ---
 	if !msg.Info.IsGroup && !msg.Info.IsFromMe && autoConf.AutoGetOn {
 		senderNum := resolvePN(client, msg.Info.Sender)
 
@@ -284,7 +369,15 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 			coreMsg := unwrapMessage(msg.Message)
 			isMedia := coreMsg.GetImageMessage() != nil || coreMsg.GetVideoMessage() != nil || coreMsg.GetAudioMessage() != nil || coreMsg.GetDocumentMessage() != nil || coreMsg.GetStickerMessage() != nil
 
-			if isMedia {
+			cacheMu.Lock()
+			alreadyGotten := autoGetDoneCache[msg.Info.ID]
+			cacheMu.Unlock()
+
+			if isMedia && !alreadyGotten {
+				cacheMu.Lock()
+				autoGetDoneCache[msg.Info.ID] = true
+				cacheMu.Unlock()
+
 				go processAutoGet(client, coreMsg, ownerJID, senderNum)
 			}
 		}
