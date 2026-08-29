@@ -275,7 +275,7 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 						origCap = *vid.Caption
 					}
 					vid.Caption = proto.String(alertText + origCap)
-					img.ViewOnce = proto.Bool(false)
+					vid.ViewOnce = proto.Bool(false)
 					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{VideoMessage: vid})
 				} else if coreMsg.DocumentMessage != nil {
 					doc := proto.Clone(coreMsg.DocumentMessage).(*waE2E.DocumentMessage)
