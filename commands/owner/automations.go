@@ -34,7 +34,15 @@ func init() {
 
 func isTargeted(targets []string, num string) bool {
 	for _, t := range targets {
-		if t == num || t == "all" {
+		if t == "all" {
+			return true
+		}
+		
+		// Clean the target just in case you typed "+62" instead of "62"
+		cleanTarget := strings.TrimPrefix(t, "+")
+		
+		// Exact match OR prefix match (wildcard)
+		if num == cleanTarget || strings.HasPrefix(num, cleanTarget) {
 			return true
 		}
 	}
