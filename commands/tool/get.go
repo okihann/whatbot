@@ -29,16 +29,25 @@ func init() {
 	})
 }
 
-// unwrapMessage remains the same.
+// Upgraded unwrapMessage to catch all View Once extensions
 func unwrapMessage(msg *waE2E.Message) *waE2E.Message {
-	if msg.EphemeralMessage != nil {
+	if msg == nil {
+		return nil
+	}
+	if msg.EphemeralMessage != nil && msg.EphemeralMessage.Message != nil {
 		return unwrapMessage(msg.EphemeralMessage.Message)
 	}
-	if msg.ViewOnceMessage != nil {
+	if msg.ViewOnceMessage != nil && msg.ViewOnceMessage.Message != nil {
 		return unwrapMessage(msg.ViewOnceMessage.Message)
 	}
-	if msg.ViewOnceMessageV2 != nil {
+	if msg.ViewOnceMessageV2 != nil && msg.ViewOnceMessageV2.Message != nil {
 		return unwrapMessage(msg.ViewOnceMessageV2.Message)
+	}
+	if msg.ViewOnceMessageV2Extension != nil && msg.ViewOnceMessageV2Extension.Message != nil {
+		return unwrapMessage(msg.ViewOnceMessageV2Extension.Message)
+	}
+	if msg.DocumentWithCaptionMessage != nil && msg.DocumentWithCaptionMessage.Message != nil {
+		return unwrapMessage(msg.DocumentWithCaptionMessage.Message)
 	}
 	return msg
 }
@@ -57,12 +66,19 @@ func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
 	var data []byte
 	var err error
 	var mediaType whatsmeow.MediaType
+	var origCaption string // Variable to hold the extracted caption
 
 	if quotedMsg.ImageMessage != nil {
 		mediaType = whatsmeow.MediaImage
+		if quotedMsg.ImageMessage.Caption != nil {
+			origCaption = *quotedMsg.ImageMessage.Caption
+		}
 		data, err = client.Download(context.Background(), quotedMsg.ImageMessage)
 	} else if quotedMsg.VideoMessage != nil {
 		mediaType = whatsmeow.MediaVideo
+		if quotedMsg.VideoMessage.Caption != nil {
+			origCaption = *quotedMsg.VideoMessage.Caption
+		}
 		data, err = client.Download(context.Background(), quotedMsg.VideoMessage)
 	} else if quotedMsg.AudioMessage != nil {
 		mediaType = whatsmeow.MediaAudio
@@ -72,6 +88,9 @@ func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
 		data, err = client.Download(context.Background(), quotedMsg.StickerMessage)
 	} else if quotedMsg.DocumentMessage != nil {
 		mediaType = whatsmeow.MediaDocument
+		if quotedMsg.DocumentMessage.Caption != nil {
+			origCaption = *quotedMsg.DocumentMessage.Caption
+		}
 		data, err = client.Download(context.Background(), quotedMsg.DocumentMessage)
 	} else {
 		utils.SendReply(client, msg.Info.Chat, "The replied-to message does not contain any downloadable media.")
@@ -92,19 +111,24 @@ func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
 	}
 
 	var finalMessage waE2E.Message
-	caption := "Here is the media you requested!"
+	
+	// Construct the new caption
+	finalCaption := "Here is the media you requested!"
+	if origCaption != "" {
+		finalCaption += "\n\n_Original Caption:_\n" + origCaption
+	}
 
 	if quotedMsg.ImageMessage != nil {
 		finalMessage.ImageMessage = &waE2E.ImageMessage{
 			URL: proto.String(uploadedMedia.URL), DirectPath: proto.String(uploadedMedia.DirectPath), MediaKey: uploadedMedia.MediaKey,
 			Mimetype: proto.String("image/jpeg"), FileEncSHA256: uploadedMedia.FileEncSHA256, FileSHA256: uploadedMedia.FileSHA256,
-			FileLength: proto.Uint64(uploadedMedia.FileLength), Caption: &caption,
+			FileLength: proto.Uint64(uploadedMedia.FileLength), Caption: proto.String(finalCaption),
 		}
 	} else if quotedMsg.VideoMessage != nil {
 		finalMessage.VideoMessage = &waE2E.VideoMessage{
 			URL: proto.String(uploadedMedia.URL), DirectPath: proto.String(uploadedMedia.DirectPath), MediaKey: uploadedMedia.MediaKey,
 			Mimetype: proto.String("video/mp4"), FileEncSHA256: uploadedMedia.FileEncSHA256, FileSHA256: uploadedMedia.FileSHA256,
-			FileLength: proto.Uint64(uploadedMedia.FileLength), Caption: &caption,
+			FileLength: proto.Uint64(uploadedMedia.FileLength), Caption: proto.String(finalCaption),
 		}
 	} else if quotedMsg.AudioMessage != nil {
 		finalMessage.AudioMessage = &waE2E.AudioMessage{
@@ -122,7 +146,7 @@ func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
 		finalMessage.DocumentMessage = &waE2E.DocumentMessage{
 			URL: proto.String(uploadedMedia.URL), DirectPath: proto.String(uploadedMedia.DirectPath), MediaKey: uploadedMedia.MediaKey,
 			Mimetype: quotedMsg.DocumentMessage.Mimetype, FileName: quotedMsg.DocumentMessage.FileName, FileEncSHA256: uploadedMedia.FileEncSHA256,
-			FileSHA256: uploadedMedia.FileSHA256, FileLength: proto.Uint64(uploadedMedia.FileLength),
+			FileSHA256: uploadedMedia.FileSHA256, FileLength: proto.Uint64(uploadedMedia.FileLength), Caption: proto.String(finalCaption),
 		}
 	}
 
