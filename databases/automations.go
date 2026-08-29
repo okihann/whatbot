@@ -17,35 +17,51 @@ type AutomationConfig struct {
 var (
 	autoConfigPath = "db/automations.json"
 	autoMutex      sync.Mutex
-	AutoConfig     *AutomationConfig
+	// Upgraded to a map to support multiple accounts simultaneously
+	AutoConfigs    map[string]*AutomationConfig
 )
 
 func init() {
-	LoadAutoConfig()
+	AutoConfigs = make(map[string]*AutomationConfig)
+	loadAllConfigs()
 }
 
-func LoadAutoConfig() *AutomationConfig {
+// Internal function to load the entire JSON map into memory on startup
+func loadAllConfigs() {
 	autoMutex.Lock()
 	defer autoMutex.Unlock()
 
-	if AutoConfig != nil {
-		return AutoConfig
-	}
-
 	data, err := os.ReadFile(autoConfigPath)
-	if err != nil {
-		AutoConfig = &AutomationConfig{AntiDeleteTargets: []string{}, AutoGetTargets: []string{}}
-		return AutoConfig
+	if err == nil {
+		json.Unmarshal(data, &AutoConfigs)
 	}
-	json.Unmarshal(data, &AutoConfig)
-	return AutoConfig
 }
 
+// GetAutoConfig dynamically fetches or creates a config for a specific bot number
+func GetAutoConfig(botID string) *AutomationConfig {
+	autoMutex.Lock()
+	defer autoMutex.Unlock()
+
+	// If this account already has settings, return them
+	if config, exists := AutoConfigs[botID]; exists {
+		return config
+	}
+
+	// If this is a brand new account connecting for the first time, initialize it
+	newConfig := &AutomationConfig{
+		AntiDeleteTargets: []string{},
+		AutoGetTargets:    []string{},
+	}
+	AutoConfigs[botID] = newConfig
+	return newConfig
+}
+
+// SaveAutoConfig saves the entire multi-account map back to JSON
 func SaveAutoConfig() error {
 	autoMutex.Lock()
 	defer autoMutex.Unlock()
 
 	os.MkdirAll(filepath.Dir(autoConfigPath), 0755)
-	data, _ := json.MarshalIndent(AutoConfig, "", "  ")
+	data, _ := json.MarshalIndent(AutoConfigs, "", "  ")
 	return os.WriteFile(autoConfigPath, data, 0644)
 }
