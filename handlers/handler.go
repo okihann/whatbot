@@ -29,7 +29,6 @@ func BotStartTime() time.Time {
 // Commands holds all registered bot commands
 var Commands = make(map[string]types.Command)
 
-// --- REACTION HANDLING SYSTEM ---
 type ReactionFunc func(client *whatsmeow.Client, msg *events.Message) bool
 
 var reactionHandlers []ReactionFunc
@@ -38,9 +37,6 @@ func RegisterReactionHandler(handler ReactionFunc) {
 	reactionHandlers = append(reactionHandlers, handler)
 }
 
-// --- END REACTION HANDLING SYSTEM ---
-
-// --- INTERACTIVE SESSION HANDLING ---
 type InteractiveSessionFunc func(client *whatsmeow.Client, msg *events.Message) bool
 
 var interactiveSessionHandlers []InteractiveSessionFunc
@@ -48,8 +44,6 @@ var interactiveSessionHandlers []InteractiveSessionFunc
 func RegisterInteractiveSessionHandler(handler InteractiveSessionFunc) {
 	interactiveSessionHandlers = append(interactiveSessionHandlers, handler)
 }
-
-// --- END INTERACTIVE SESSION HANDLING ---
 
 // categoryEmojis maps category names to emojis for a more visual menu.
 var categoryEmojis = map[string]string{
@@ -96,7 +90,7 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 	// 3. If not a reaction or session, process as a potential COMMAND.
 	text := utils.GetTextFromMessage(msg.Message)
 	jid := msg.Info.Chat
-    
+
 	if strings.HasPrefix(text, "->") {
 		// Find the 'eval' command specifically
 		if cmd, ok := Commands["eval"]; ok {
@@ -159,7 +153,6 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 	}
 	// *** END OF MODIFICATION ***
 	if cmd, ok := Commands[commandName]; ok {
-		// --- 1. GLOBAL OWNER IDENTIFICATION ---
 		isOwner := false
 		if msg.Info.IsFromMe {
 			isOwner = true
@@ -173,25 +166,23 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 			}
 		}
 
-		// --- 2. OWNER COMMAND GATEKEEPER ---
 		if cmd.Category == "owner" && !isOwner {
 			utils.SendReply(client, jid, "⛔ Access Denied: This command is restricted to the bot owner.")
 			return
 		}
 
-		// --- 3. GROUP FEATURE CHECK (WITH OWNER BYPASS) ---
 		if msg.Info.IsGroup {
 			// ONLY block the command if the user is NOT an owner
 			if !isOwner {
 				settings, err := db.LoadGroupSettings(jid.String())
 				if err != nil {
-					return 
+					return
 				}
 				if settings.DisabledCategories[cmd.Category] {
-					return 
+					return
 				}
 				if settings.DisabledCommands[cmd.Name] {
-					return 
+					return
 				}
 			}
 		}
@@ -200,7 +191,6 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 	}
 }
 
-// --- HELP MENU LOGIC ---
 // formatDuration formats the uptime into a readable string.
 func formatDuration(d time.Duration) string {
 	d = d.Round(time.Second)
@@ -223,7 +213,6 @@ func GenerateHelpMenu(conf *config.Config, categories map[string][]string, reque
 	var orderedCategories []string
 
 	if requestedCategory == "" {
-		// --- Main Menu ---
 		for name := range categories {
 			orderedCategories = append(orderedCategories, name)
 		}
@@ -267,7 +256,6 @@ func GenerateHelpMenu(conf *config.Config, categories map[string][]string, reque
 		return strings.TrimSpace(finalMenu), orderedCategories
 
 	} else {
-		// --- Category Specific Menu ---
 		var builder strings.Builder
 		commands, ok := categories[requestedCategory]
 		if !ok {

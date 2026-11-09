@@ -112,8 +112,6 @@ func processYTCommand(client *whatsmeow.Client, msg *events.Message, args []stri
 	}()
 }
 
-// --- DIRECT DOWNLOADERS ---
-
 func downloadDirectYTVideo(client *whatsmeow.Client, msg *events.Message, videoURL string) {
 	utils.SendReply(client, msg.Info.Chat, "  Fetching video details...")
 
@@ -189,7 +187,7 @@ func downloadDirectYTAudio(client *whatsmeow.Client, msg *events.Message, videoU
 	defer ffCleanup()
 
 	tempDir := "temp"
-	os.Mkdir(tempDir, 0755)
+	os.MkdirAll(tempDir, 0755)
 	outputFile := filepath.Join(tempDir, fmt.Sprintf("audio_%d.mp3", time.Now().Unix()))
 	defer os.Remove(outputFile)
 
@@ -223,12 +221,10 @@ func downloadDirectYTAudio(client *whatsmeow.Client, msg *events.Message, videoU
 		MediaKey: uploaded.MediaKey, Mimetype: proto.String("audio/mpeg"),
 		FileSHA256: uploaded.FileSHA256, FileEncSHA256: uploaded.FileEncSHA256,
 		FileLength: proto.Uint64(uploaded.FileLength),
-        Seconds: proto.Uint32(uint32(videoInfo.Duration)),
+		Seconds:    proto.Uint32(uint32(videoInfo.Duration)),
 	}
 	client.SendMessage(context.Background(), msg.Info.Chat, &waE2E.Message{AudioMessage: audioMsg})
 }
-
-// --- INTERACTIVE MENU & INTERCEPTOR ---
 
 func SendYTPage(client *whatsmeow.Client, chatJID waTypes.JID, sess *session.InteractiveSession) {
 	results := sess.Data.([]utils.YTSearchResult)

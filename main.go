@@ -14,21 +14,21 @@ import (
 	"time"
 
 	"bot/ai"
-	"bot/handlers"
-	"bot/ngrok"
 	"bot/commands/owner"
 	_ "bot/commands/tool"
+	"bot/handlers"
+	"bot/ngrok"
 
 	_ "modernc.org/sqlite"
 
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waCompanionReg"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types/events"
-	"go.mau.fi/whatsmeow/proto/waCompanionReg"
-	"google.golang.org/protobuf/proto"
 	waLog "go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -48,7 +48,7 @@ func setupClient(deviceStore *store.Device) {
 		store.DeviceProps.Os = proto.String("iPadOS")
 		store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_IPAD.Enum()
 	}
-		
+
 	client.AddEventHandler(func(evt interface{}) {
 		switch v := evt.(type) {
 		case *events.Connected:
@@ -166,51 +166,49 @@ func main() {
 	fmt.Println("==============================================================")
 
 	go func() {
-			scanner := bufio.NewScanner(os.Stdin)
-			for scanner.Scan() {
-				text := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			text := strings.ToLower(strings.TrimSpace(scanner.Text()))
 
-				// --- 1. NEW REMOVE LOGIC GOES HERE (Before the switch) ---
-				if strings.HasPrefix(text, "remove ") {
-					target := strings.TrimSpace(strings.TrimPrefix(text, "remove"))
-					clientsMu.Lock()
-					if client, ok := activeClients[target]; ok {
-						client.Disconnect()
-						client.Store.Delete(context.Background()) // <-- FIX: Added context.Background()
-						delete(activeClients, target)
-						fmt.Printf("  [SUCCESS] Wiped and removed bot account: %s\n", target)
-					} else {
-						fmt.Printf("  [ERROR] ID '%s' not found. Type 'list' to see valid IDs.\n", target)
-					}
-					clientsMu.Unlock()
-					continue // Skip the switch below
+			if strings.HasPrefix(text, "remove ") {
+				target := strings.TrimSpace(strings.TrimPrefix(text, "remove"))
+				clientsMu.Lock()
+				if client, ok := activeClients[target]; ok {
+					client.Disconnect()
+					client.Store.Delete(context.Background()) // <-- FIX: Added context.Background()
+					delete(activeClients, target)
+					fmt.Printf("  [SUCCESS] Wiped and removed bot account: %s\n", target)
+				} else {
+					fmt.Printf("  [ERROR] ID '%s' not found. Type 'list' to see valid IDs.\n", target)
 				}
+				clientsMu.Unlock()
+				continue // Skip the switch below
+			}
 
-				// --- 2. EXISTING SWITCH LOGIC REMAINS UNCHANGED ---
-				switch text {
-				case "add":
-					setupClient(dbContainer.NewDevice())
-				case "list":
-					clientsMu.Lock()
-					fmt.Printf("\n--- Active Bot Accounts (%d) ---\n", len(activeClients))
-					for id := range activeClients {
-						fmt.Printf("  %s\n", id)
-					}
-					fmt.Println("--------------------------------")
-					clientsMu.Unlock()
-				case "ngrok on":
-					startNgrok()
-				case "ngrok off":
-					stopNgrok()
-				case "ngrok":
-					if publicTunnel.Enabled() {
-						fmt.Println("  [NGROK] Tunnel is ON")
-					} else {
-						fmt.Println("  [NGROK] Tunnel is OFF")
-					}
+			switch text {
+			case "add":
+				setupClient(dbContainer.NewDevice())
+			case "list":
+				clientsMu.Lock()
+				fmt.Printf("\n--- Active Bot Accounts (%d) ---\n", len(activeClients))
+				for id := range activeClients {
+					fmt.Printf("  %s\n", id)
+				}
+				fmt.Println("--------------------------------")
+				clientsMu.Unlock()
+			case "ngrok on":
+				startNgrok()
+			case "ngrok off":
+				stopNgrok()
+			case "ngrok":
+				if publicTunnel.Enabled() {
+					fmt.Println("  [NGROK] Tunnel is ON")
+				} else {
+					fmt.Println("  [NGROK] Tunnel is OFF")
 				}
 			}
-		}()
+		}
+	}()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)

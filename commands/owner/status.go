@@ -30,22 +30,20 @@ func init() {
 }
 
 func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string) {
-	// --- PROPER DELETION LOGIC ---
 	fullText := ""
 	if len(args) > 0 {
 		fullText = strings.TrimSpace(args[0])
 	}
 
-	// --- 1. PROPER DELETION LOGIC ---
 	if strings.HasPrefix(strings.ToLower(fullText), "delete") {
 		// Split the text into separate words to extract the ID
 		parts := strings.Fields(fullText)
-		
+
 		if len(parts) < 2 {
 			utils.SendReply(client, msg.Info.Chat, "Please provide the status ID to delete. E.g., `/status delete 12345ABC...`")
 			return
 		}
-		
+
 		statusID := parts[1] // The actual ID is the second word
 		statusJID := waTypes.NewJID("status", "broadcast")
 		ownJID := client.Store.ID.ToNonAD()
@@ -167,9 +165,8 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 			},
 		}
 	} else if docMsg != nil {
-		// --- SMART DOCUMENT CONVERSION ---
 		mime := docMsg.GetMimetype()
-		
+
 		if strings.HasPrefix(mime, "video/") {
 			utils.SendReply(client, msg.Info.Chat, "Converting video document to status and generating thumbnail...")
 			data, err := client.Download(context.Background(), docMsg)
@@ -178,10 +175,9 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 				return
 			}
 
-			// --- THE FIX: GENERATE THUMBNAIL AND DURATION ---
 			tempDir := "temp"
 			os.MkdirAll(tempDir, 0755)
-			
+
 			// Save the video temporarily to memory
 			tempPath := filepath.Join(tempDir, fmt.Sprintf("status_vid_%d.mp4", time.Now().UnixNano()))
 			os.WriteFile(tempPath, data, 0644)
@@ -198,8 +194,7 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 				durFloat, _ := strconv.ParseFloat(strings.TrimSpace(string(durBytes)), 64)
 				seconds = uint32(durFloat)
 			}
-			// ------------------------------------------------
-			
+
 			// Upload as MediaVideo instead of Document
 			uploaded, err := client.Upload(context.Background(), data, whatsmeow.MediaVideo)
 			if err != nil {
@@ -228,7 +223,7 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 				utils.SendReply(client, msg.Info.Chat, "Failed to download document.")
 				return
 			}
-			
+
 			uploaded, err := client.Upload(context.Background(), data, whatsmeow.MediaImage)
 			if err != nil {
 				utils.SendReply(client, msg.Info.Chat, "Failed to upload as image status.")
@@ -256,7 +251,7 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 			utils.SendReply(client, msg.Info.Chat, "Please provide text, a media reply, or use `/status delete <id>`.")
 			return
 		}
-        
+
 		statusMsg = &waE2E.Message{
 			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
 				Text:           proto.String(caption),
@@ -266,7 +261,7 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 	}
 
 	resp, err := client.SendMessage(context.Background(), statusJID, statusMsg)
-	
+
 	if err != nil {
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("❌ Failed to send status: %v", err))
 	} else {

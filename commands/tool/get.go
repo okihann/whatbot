@@ -29,29 +29,6 @@ func init() {
 	})
 }
 
-// Upgraded unwrapMessage to catch all View Once extensions
-func unwrapMessage(msg *waE2E.Message) *waE2E.Message {
-	if msg == nil {
-		return nil
-	}
-	if msg.EphemeralMessage != nil && msg.EphemeralMessage.Message != nil {
-		return unwrapMessage(msg.EphemeralMessage.Message)
-	}
-	if msg.ViewOnceMessage != nil && msg.ViewOnceMessage.Message != nil {
-		return unwrapMessage(msg.ViewOnceMessage.Message)
-	}
-	if msg.ViewOnceMessageV2 != nil && msg.ViewOnceMessageV2.Message != nil {
-		return unwrapMessage(msg.ViewOnceMessageV2.Message)
-	}
-	if msg.ViewOnceMessageV2Extension != nil && msg.ViewOnceMessageV2Extension.Message != nil {
-		return unwrapMessage(msg.ViewOnceMessageV2Extension.Message)
-	}
-	if msg.DocumentWithCaptionMessage != nil && msg.DocumentWithCaptionMessage.Message != nil {
-		return unwrapMessage(msg.DocumentWithCaptionMessage.Message)
-	}
-	return msg
-}
-
 func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
 	ctxInfo := msg.Message.GetExtendedTextMessage().GetContextInfo()
 	if ctxInfo == nil || ctxInfo.QuotedMessage == nil {
@@ -61,7 +38,7 @@ func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
 
 	utils.SendReply(client, msg.Info.Chat, "Processing media, please wait...")
 
-	quotedMsg := unwrapMessage(ctxInfo.QuotedMessage)
+	quotedMsg := utils.UnwrapMessage(ctxInfo.QuotedMessage)
 
 	var data []byte
 	var err error
@@ -111,7 +88,7 @@ func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
 	}
 
 	var finalMessage waE2E.Message
-	
+
 	// Construct the new caption
 	finalCaption := "Here is the media you requested!"
 	if origCaption != "" {
@@ -157,7 +134,6 @@ func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
 		recipientJID = msg.Info.Sender
 	}
 
-	// --- DEFINITIVE FIX: Convert the JID to its non-device form ---
 	bareRecipientJID := recipientJID.ToNonAD()
 
 	_, err = client.SendMessage(context.Background(), bareRecipientJID, &finalMessage)

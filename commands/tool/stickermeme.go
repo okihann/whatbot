@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bot/config"
 	"bot/handlers"
 	"bot/types"
 	"bot/utils"
@@ -28,9 +29,10 @@ func init() {
 }
 
 func executeStickerMeme(client *whatsmeow.Client, msg *events.Message, args []string) {
-	// THE FIX: Add your user hash here so Catbox authorizes the deletion request.
-	// You can get this by logging into catbox.moe and checking your account page.
-	CatboxUserHash := "8b3453f86d3dbb67e47f6a8c1"
+	var catboxUserHash string
+	if conf, err := config.LoadConfig(); err == nil {
+		catboxUserHash = strings.TrimSpace(conf.Downloader.CatboxUserHash)
+	}
 
 	mediaMsg := utils.GetMediaMessage(msg.Message)
 	if mediaMsg == nil || len(args) == 0 {
@@ -46,8 +48,12 @@ func executeStickerMeme(client *whatsmeow.Client, msg *events.Message, args []st
 	if len(parts) > 1 {
 		bottom = strings.TrimSpace(parts[1])
 	}
-	if top == "" { top = "_" }
-	if bottom == "" { bottom = "_" }
+	if top == "" {
+		top = "_"
+	}
+	if bottom == "" {
+		bottom = "_"
+	}
 
 	utils.SendReply(client, msg.Info.Chat, "🎨 Generating meme...")
 
@@ -61,9 +67,9 @@ func executeStickerMeme(client *whatsmeow.Client, msg *events.Message, args []st
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	writer.WriteField("reqtype", "fileupload")
-	
-	if CatboxUserHash != "8b3453f86d3dbb67e47f6a8c1" {
-		writer.WriteField("userhash", CatboxUserHash)
+
+	if catboxUserHash != "" {
+		writer.WriteField("userhash", catboxUserHash)
 	}
 
 	part, _ := writer.CreateFormFile("fileToUpload", "meme.png")
@@ -73,17 +79,17 @@ func executeStickerMeme(client *whatsmeow.Client, msg *events.Message, args []st
 	req, _ := http.NewRequest("POST", "https://catbox.moe/user/api.php", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	
+
 	catboxResp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
-	if err != nil { 
+	if err != nil {
 		utils.SendReply(client, msg.Info.Chat, "❌ Network error reaching Catbox API.")
-		return 
+		return
 	}
 	defer catboxResp.Body.Close()
 	catboxURLBytes, _ := io.ReadAll(catboxResp.Body)
-	
+
 	catboxURL := strings.TrimSpace(string(catboxURLBytes))
-	
+
 	if !strings.HasPrefix(catboxURL, "http") {
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("❌ Failed to upload to Catbox.\n\n*Response:* %s", catboxURL))
 		return
@@ -119,7 +125,9 @@ func executeStickerMeme(client *whatsmeow.Client, msg *events.Message, args []st
 	defer os.Remove(outputPath)
 
 	ffmpegPath, cleanup, err := utils.GetFFmpegPath()
-	if err != nil { return }
+	if err != nil {
+		return
+	}
 	defer cleanup()
 
 	convertCmd := exec.Command(ffmpegPath, "-i", inputPath, "-vcodec", "libwebp", "-vf", "scale=512:512:force_original_aspect_ratio=decrease,format=rgba,pad=512:512:(ow-iw)/2:(oh-ih)/2:color='#00000000'", outputPath)
@@ -145,19 +153,19 @@ func executeStickerMeme(client *whatsmeow.Client, msg *events.Message, args []st
 	client.SendMessage(context.Background(), msg.Info.Chat, stickerMsg)
 
 	// 5. Fire a background request to delete the original image from Catbox Servers
-	if CatboxUserHash != "8b3453f86d3dbb67e47f6a8c1" && catboxFilename != "" {
+	if catboxUserHash != "" && catboxFilename != "" {
 		go func() {
 			delBody := &bytes.Buffer{}
 			delWriter := multipart.NewWriter(delBody)
 			delWriter.WriteField("reqtype", "deletefiles")
-			delWriter.WriteField("userhash", CatboxUserHash)
+			delWriter.WriteField("userhash", catboxUserHash)
 			delWriter.WriteField("files", catboxFilename)
 			delWriter.Close()
 
 			delReq, _ := http.NewRequest("POST", "https://catbox.moe/user/api.php", delBody)
 			delReq.Header.Set("Content-Type", delWriter.FormDataContentType())
 			delReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-			
+
 			// Execute silently in the background
 			(&http.Client{Timeout: 10 * time.Second}).Do(delReq)
 		}()

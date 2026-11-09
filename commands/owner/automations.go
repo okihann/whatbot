@@ -30,17 +30,15 @@ func init() {
 	handlers.RegisterCommand(types.Command{Name: "auto-get", Category: "owner", Execute: executeAutoGet})
 }
 
-// --- HELPER FUNCTIONS ---
-
 func isTargeted(targets []string, num string) bool {
 	for _, t := range targets {
 		if t == "all" {
 			return true
 		}
-		
+
 		// Clean the target just in case you typed "+62" instead of "62"
 		cleanTarget := strings.TrimPrefix(t, "+")
-		
+
 		// Exact match OR prefix match (wildcard)
 		if num == cleanTarget || strings.HasPrefix(num, cleanTarget) {
 			return true
@@ -58,28 +56,6 @@ func resolvePN(client *whatsmeow.Client, jid waTypes.JID) string {
 		}
 	}
 	return nonAD.User
-}
-
-func unwrapMessage(msg *waE2E.Message) *waE2E.Message {
-	if msg == nil {
-		return nil
-	}
-	if msg.EphemeralMessage != nil && msg.EphemeralMessage.Message != nil {
-		return unwrapMessage(msg.EphemeralMessage.Message)
-	}
-	if msg.ViewOnceMessage != nil && msg.ViewOnceMessage.Message != nil {
-		return unwrapMessage(msg.ViewOnceMessage.Message)
-	}
-	if msg.ViewOnceMessageV2 != nil && msg.ViewOnceMessageV2.Message != nil {
-		return unwrapMessage(msg.ViewOnceMessageV2.Message)
-	}
-	if msg.ViewOnceMessageV2Extension != nil && msg.ViewOnceMessageV2Extension.Message != nil {
-		return unwrapMessage(msg.ViewOnceMessageV2Extension.Message)
-	}
-	if msg.DocumentWithCaptionMessage != nil && msg.DocumentWithCaptionMessage.Message != nil {
-		return unwrapMessage(msg.DocumentWithCaptionMessage.Message)
-	}
-	return msg
 }
 
 func extractContextInfo(msg *waE2E.Message) *waE2E.ContextInfo {
@@ -103,8 +79,6 @@ func extractContextInfo(msg *waE2E.Message) *waE2E.ContextInfo {
 	}
 	return nil
 }
-
-// --- COMMAND LOGIC (STRICT OWNER ONLY) ---
 
 func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []string, feature string) {
 	conf, err := config.LoadConfig()
@@ -217,8 +191,6 @@ func executeAutoGet(client *whatsmeow.Client, msg *events.Message, args []string
 	manageAutomation(client, msg, args, "auto-get")
 }
 
-// --- EVENT INTERCEPTOR (THE BACKGROUND WORKER) ---
-
 func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 	if msg.Message == nil {
 		return
@@ -229,10 +201,9 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 	}
 	ownerJID := client.Store.ID.ToNonAD()
 	botID := ownerJID.User
-	
+
 	autoConf := db.GetAutoConfig(botID)
 
-	// --- 1. ANTI-DELETE TRIGGER ---
 	if msg.Message.GetProtocolMessage() != nil && msg.Message.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_REVOKE {
 		targetID := msg.Message.GetProtocolMessage().GetKey().GetID()
 
@@ -244,7 +215,7 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 			senderNum := resolvePN(client, cachedMsg.Info.Sender)
 
 			if isTargeted(autoConf.AntiDeleteTargets, senderNum) {
-				
+
 				// FEATURE UPDATE: Accurately label Statuses, Groups, and DMs
 				chatName := "Private Chat"
 				if cachedMsg.Info.Chat.Server == "broadcast" {
@@ -254,7 +225,7 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 				}
 
 				alertText := fmt.Sprintf("🚨 *Anti-Delete Triggered*\n*Target:* %s\n*Chat:* %s\n\n_Recovered Message:_\n", senderNum, chatName)
-				coreMsg := unwrapMessage(cachedMsg.Message)
+				coreMsg := utils.UnwrapMessage(cachedMsg.Message)
 
 				isText := coreMsg.Conversation != nil || coreMsg.ExtendedTextMessage != nil
 
@@ -314,11 +285,10 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		}(msg.Info.ID)
 	}
 
-	// --- 2. QUOTE INSPECTOR (FIXED FOR 1-ON-1 PRIVATE CHATS) ---
 	ctxInfo := extractContextInfo(msg.Message)
 	if ctxInfo != nil && ctxInfo.QuotedMessage != nil && ctxInfo.StanzaID != nil {
 		quotedID := *ctxInfo.StanzaID
-		quotedMedia := unwrapMessage(ctxInfo.QuotedMessage)
+		quotedMedia := utils.UnwrapMessage(ctxInfo.QuotedMessage)
 
 		var quotedSenderJID waTypes.JID
 		if ctxInfo.Participant != nil && *ctxInfo.Participant != "" {
@@ -371,17 +341,15 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		}
 	}
 
-	// --- 3. DIRECT INCOMING MEDIA AUTO-GET LOGIC ---
-	// BUGFIX: Added `msg.Info.Chat.Server != "broadcast"` so it doesn't auto-download every status
 	if !msg.Info.IsGroup && msg.Info.Chat.Server != "broadcast" && !msg.Info.IsFromMe && autoConf.AutoGetOn {
 		senderNum := resolvePN(client, msg.Info.Sender)
 
 		if isTargeted(autoConf.AutoGetTargets, senderNum) {
-			coreMsg := unwrapMessage(msg.Message)
-			
-			isMedia := coreMsg.GetImageMessage() != nil || 
-				coreMsg.GetVideoMessage() != nil || 
-				coreMsg.GetAudioMessage() != nil || 
+			coreMsg := utils.UnwrapMessage(msg.Message)
+
+			isMedia := coreMsg.GetImageMessage() != nil ||
+				coreMsg.GetVideoMessage() != nil ||
+				coreMsg.GetAudioMessage() != nil ||
 				coreMsg.GetDocumentMessage() != nil
 
 			cacheMu.Lock()
@@ -398,8 +366,6 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 		}
 	}
 }
-
-// --- MEDIA PROCESSOR (DOWNLOAD & UPLOAD WITH FALLBACK) ---
 
 func processAutoGet(client *whatsmeow.Client, coreMsg *waE2E.Message, ownerJID waTypes.JID, senderNum string) {
 	var mediaType whatsmeow.MediaType
@@ -442,7 +408,7 @@ func processAutoGet(client *whatsmeow.Client, coreMsg *waE2E.Message, ownerJID w
 	// FALLBACK ROUTER: If download fails (direct View Once block), route the raw keys
 	if err != nil {
 		fmt.Printf("  [AUTO-GET] Download failed (%v), falling back to router method...\n", err)
-		
+
 		if coreMsg.ImageMessage != nil {
 			img := proto.Clone(coreMsg.ImageMessage).(*waE2E.ImageMessage)
 			img.Caption = proto.String(finalCaption)

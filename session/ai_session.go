@@ -37,8 +37,6 @@ func init() {
 	loadUserData()
 }
 
-// --- User Data Management ---
-
 func loadUserData() {
 	aiMutex.Lock()
 	defer aiMutex.Unlock()
@@ -82,8 +80,6 @@ func getUserDataInternal(userID string) *types.UserData {
 	}
 	return userDataCache[userID]
 }
-
-// --- AI Session Management ---
 
 func getSessionFilePath(userID, sessionID string) string {
 	userDir := filepath.Join(conversationsDir, userID)

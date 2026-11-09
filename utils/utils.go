@@ -37,7 +37,7 @@ type YtDlpResponse struct {
 	Thumbnail      string          `json:"thumbnail"`
 	Filesize       int64           `json:"filesize"`
 	FilesizeApprox int64           `json:"filesize_approx"`
-    Duration       float64         `json:"duration"`
+	Duration       float64         `json:"duration"`
 	Entries        []YtDlpResponse `json:"entries"`
 }
 
@@ -276,14 +276,14 @@ func DownloadVideo(videoURL, outputFile, quality string) error {
 
 	// 3. Force FFMPEG to transcode to H.264 (Video) and AAC (Audio)
 	fmt.Printf("Transcoding %s to Android-friendly H.264...\n", rawFile)
-	
+
 	ffArgs := []string{
 		"-i", rawFile,
 		"-c:v", "libx264",
 		"-c:a", "aac",
 		"-preset", "veryfast", // Saves CPU on your Pterodactyl server
-		"-crf", "20",          // Compresses size slightly without destroying quality
-		"-y",                  // Overwrite output
+		"-crf", "20", // Compresses size slightly without destroying quality
+		"-y", // Overwrite output
 		outputFile,
 	}
 
@@ -484,12 +484,36 @@ func GetShazamCliPath() (path string, cleanup func(), err error) {
 	return binPath, func() {}, nil
 }
 
+// UnwrapMessage peels away ephemeral / view-once / captioned wrappers so the
+// caller always sees the underlying concrete message type.
+func UnwrapMessage(msg *waE2E.Message) *waE2E.Message {
+	if msg == nil {
+		return nil
+	}
+	if msg.EphemeralMessage != nil && msg.EphemeralMessage.Message != nil {
+		return UnwrapMessage(msg.EphemeralMessage.Message)
+	}
+	if msg.ViewOnceMessage != nil && msg.ViewOnceMessage.Message != nil {
+		return UnwrapMessage(msg.ViewOnceMessage.Message)
+	}
+	if msg.ViewOnceMessageV2 != nil && msg.ViewOnceMessageV2.Message != nil {
+		return UnwrapMessage(msg.ViewOnceMessageV2.Message)
+	}
+	if msg.ViewOnceMessageV2Extension != nil && msg.ViewOnceMessageV2Extension.Message != nil {
+		return UnwrapMessage(msg.ViewOnceMessageV2Extension.Message)
+	}
+	if msg.DocumentWithCaptionMessage != nil && msg.DocumentWithCaptionMessage.Message != nil {
+		return UnwrapMessage(msg.DocumentWithCaptionMessage.Message)
+	}
+	return msg
+}
+
 // GetMediaMessage safely extracts downloadable media from a message or a quoted message
 func GetMediaMessage(msg *waE2E.Message) whatsmeow.DownloadableMessage {
 	if msg == nil {
 		return nil
 	}
-	
+
 	// Check direct messages
 	if msg.ImageMessage != nil {
 		return msg.ImageMessage

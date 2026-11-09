@@ -76,7 +76,7 @@ func executePinterest(client *whatsmeow.Client, msg *events.Message, args []stri
 		utils.SendReply(client, msg.Info.Chat, "📥 Downloading Pinterest media...")
 		go func() {
 			downloadUrl := query
-			
+
 			if strings.Contains(query, "pin.it") {
 				resp, err := http.Get(query)
 				if err == nil {
@@ -97,36 +97,35 @@ func executePinterest(client *whatsmeow.Client, msg *events.Message, args []stri
 				defer cleanup()
 			}
 
-			cmd := exec.Command(ytDlpPath, downloadUrl, 
+			cmd := exec.Command(ytDlpPath, downloadUrl,
 				"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-				"-f", "best", 
-				"-o", outputTemplate, 
+				"-f", "best",
+				"-o", outputTemplate,
 				"--no-warnings")
-				
+
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				if strings.Contains(string(out), "No video formats found") || strings.Contains(string(out), "HTTP Error 404") || strings.Contains(string(out), "Unsupported URL") {
-					
-					// THE FIX: Added Chrome User-Agent so Pinterest doesn't block the scraper fallback
+
 					req, _ := http.NewRequest("GET", downloadUrl, nil)
 					req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
-					
+
 					resp, httpErr := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 					if httpErr == nil {
 						defer resp.Body.Close()
 						htmlBytes, _ := io.ReadAll(resp.Body)
 						htmlStr := string(htmlBytes)
-						
+
 						if strings.Contains(htmlStr, `meta property="og:image" content="`) {
 							parts := strings.Split(htmlStr, `meta property="og:image" content="`)
 							if len(parts) > 1 {
 								imgUrl := strings.Split(parts[1], `"`)[0]
-								
+
 								imgResp, imgErr := http.Get(imgUrl)
 								if imgErr == nil {
 									defer imgResp.Body.Close()
 									imgData, _ := io.ReadAll(imgResp.Body)
-									
+
 									uploaded, _ := client.Upload(context.Background(), imgData, whatsmeow.MediaImage)
 									imageMsg := &waE2E.Message{
 										ImageMessage: &waE2E.ImageMessage{
@@ -147,7 +146,7 @@ func executePinterest(client *whatsmeow.Client, msg *events.Message, args []stri
 						}
 					}
 				}
-				
+
 				utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("❌ Failed to download Pinterest link.\n\n*yt-dlp Log:* %s", string(out)))
 				return
 			}
@@ -162,7 +161,9 @@ func executePinterest(client *whatsmeow.Client, msg *events.Message, args []stri
 			defer os.Remove(downloadedFile)
 
 			mediaData, err := os.ReadFile(downloadedFile)
-			if err != nil { return }
+			if err != nil {
+				return
+			}
 
 			ext := strings.ToLower(filepath.Ext(downloadedFile))
 

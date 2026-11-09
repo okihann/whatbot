@@ -19,7 +19,6 @@ type HelpMenuTemplate struct {
 	CategoryMenu string `json:"categoryMenu"`
 }
 
-// NEW: AIModel defines the structure for a model in the selector
 type AIModel struct {
 	Name string `json:"name"` // User-friendly name (e.g., "Mistral 7B (Free)")
 	ID   string `json:"id"`   // API-specific ID (e.g., "mistralai/mistral-7b-instruct:free")
@@ -29,7 +28,7 @@ type AIModel struct {
 type APISettings struct {
 	GroqAPIKey       string    `json:"groqApiKey"`
 	OpenRouterAPIKey string    `json:"openRouterApiKey"`
-	AvailableModels  []AIModel `json:"availableModels"` // NEW: List of models for the web UI
+	AvailableModels  []AIModel `json:"availableModels"`
 }
 
 // WebServerSettings holds settings for the web server.
@@ -39,9 +38,9 @@ type WebServerSettings struct {
 	Port string `json:"port"`
 }
 
-// NEW: DownloaderSettings holds settings for yt-dlp.
 type DownloaderSettings struct {
-	CookiesFile string `json:"cookiesFile"`
+	CookiesFile    string `json:"cookiesFile"`
+	CatboxUserHash string `json:"catboxUserHash"`
 }
 
 // Config is the top-level structure for the entire config.json file.
@@ -91,7 +90,7 @@ Reply with the number of the menu you want to view.`,
 		APIs: APISettings{
 			GroqAPIKey:       "YOUR_GROQ_API_KEY_HERE",
 			OpenRouterAPIKey: "YOUR_OPENROUTER_API_KEY_HERE",
-			// NEW: Default model list
+
 			AvailableModels: []AIModel{
 				{Name: "Mistral 7B (Free)", ID: "mistralai/mistral-7b-instruct:free"},
 				{Name: "Gemini Flash 1.5", ID: "google/gemini-flash-1.5"},
@@ -104,7 +103,7 @@ Reply with the number of the menu you want to view.`,
 			Host: "0.0.0.0",
 			Port: "6064",
 		},
-		// NEW: Add default downloader settings
+
 		Downloader: DownloaderSettings{
 			CookiesFile: "", // Default is no cookies file
 		},
@@ -142,14 +141,12 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
-	// --- THIS IS THE FIX ---
 	// Check if the Downloader field is uninitialized (i.e., it's an old config)
 	if conf.Downloader == (DownloaderSettings{}) {
 		// If it is, populate it with the default values
 		conf.Downloader = defaultConfig().Downloader
 	}
 
-	// --- MODIFIED THIS CHECK ---
 	// We can't compare structs with slices. Instead, we'll check the fields
 	// individually. This ensures that old configs are properly updated.
 
@@ -167,7 +164,6 @@ func LoadConfig() (*Config, error) {
 	if len(conf.APIs.AvailableModels) == 0 {
 		conf.APIs.AvailableModels = defaultConfig().APIs.AvailableModels // Add default models
 	}
-	// --- END OF FIX ---
 
 	configCache = &conf
 	return configCache, nil

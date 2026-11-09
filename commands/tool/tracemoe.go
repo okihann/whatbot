@@ -21,11 +21,6 @@ func init() {
 		Category: "anime",
 		Execute:  executeTraceAnime,
 	})
-    handlers.RegisterCommand(types.Command{
-		Name:     "traceanime",
-		Category: "anime",
-		Execute:  executeTraceAnime,
-	})
 }
 
 func executeTraceAnime(client *whatsmeow.Client, msg *events.Message, args []string) {
@@ -35,7 +30,6 @@ func executeTraceAnime(client *whatsmeow.Client, msg *events.Message, args []str
 		return
 	}
 
-	// --- DOCUMENT SAFEGUARD ---
 	// If the user uploaded the photo as a Document, ensure it is actually an image format (JPG/PNG)
 	if docMsg := msg.Message.GetDocumentMessage(); docMsg != nil {
 		if !strings.HasPrefix(docMsg.GetMimetype(), "image/") {
@@ -61,7 +55,7 @@ func executeTraceAnime(client *whatsmeow.Client, msg *events.Message, args []str
 
 	// Added cutBorders=1 to ignore WhatsApp compression artifacts
 	req, _ := http.NewRequest("POST", "https://api.trace.moe/search?cutBorders=1", bytes.NewBuffer(imageData))
-	req.Header.Set("Content-Type", "image/jpeg") 
+	req.Header.Set("Content-Type", "image/jpeg")
 
 	clientHTTP := &http.Client{}
 	resp, err := clientHTTP.Do(req)
