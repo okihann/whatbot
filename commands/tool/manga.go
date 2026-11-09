@@ -38,13 +38,13 @@ func executeManga(client *whatsmeow.Client, msg *events.Message, args []string) 
 
 	var result struct {
 		Data []struct {
-			Title      string `json:"title"`
-			Status     string `json:"status"`
-			Chapters   int    `json:"chapters"`
-			Volumes    int    `json:"volumes"`
-			Synopsis   string `json:"synopsis"`
-			Score      float64 `json:"score"`
-			Images     struct {
+			Title    string  `json:"title"`
+			Status   string  `json:"status"`
+			Chapters int     `json:"chapters"`
+			Volumes  int     `json:"volumes"`
+			Synopsis string  `json:"synopsis"`
+			Score    float64 `json:"score"`
+			Images   struct {
 				Jpg struct {
 					ImageURL string `json:"image_url"`
 				} `json:"jpg"`
@@ -62,12 +62,14 @@ func executeManga(client *whatsmeow.Client, msg *events.Message, args []string) 
 	caption += fmt.Sprintf("📊 *Score:* %.2f\n", m.Score)
 	caption += fmt.Sprintf("📌 *Status:* %s\n", m.Status)
 	caption += fmt.Sprintf("📑 *Chapters:* %d | *Volumes:* %d\n\n", m.Chapters, m.Volumes)
-	
+
 	synopsis := m.Synopsis
-	if len(synopsis) > 500 { synopsis = synopsis[:500] + "..." }
+	if len(synopsis) > 500 {
+		synopsis = synopsis[:500] + "..."
+	}
 	caption += fmt.Sprintf("📝 *Synopsis:*\n%s", synopsis)
 
-	// In utils, you can add a generic SendImageFromURL if you want to send the cover, 
-    // otherwise sending as text works perfectly:
+	// In utils, you can add a generic SendImageFromURL if you want to send the cover,
+	// otherwise sending as text works perfectly:
 	utils.SendReply(client, msg.Info.Chat, caption)
 }

@@ -18,7 +18,7 @@ var (
 	autoConfigPath = "db/automations.json"
 	autoMutex      sync.Mutex
 	// Upgraded to a map to support multiple accounts simultaneously
-	AutoConfigs    map[string]*AutomationConfig
+	AutoConfigs map[string]*AutomationConfig
 )
 
 func init() {

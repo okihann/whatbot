@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-    "log"
 )
 
 const WorkspaceDir = "./workspace"
@@ -76,10 +76,10 @@ func ExecuteSandboxedCommand(cmdStr string) string {
 
 	// STRICT SANDBOX BLOCKLIST
 	blocked := []string{
-		"rm -rf /", "mkfs", "dd ", ":(){:|:&};:", "shutdown", "reboot", 
+		"rm -rf /", "mkfs", "dd ", ":(){:|:&};:", "shutdown", "reboot",
 		"..", "cd /", "~", "env", "export", "config.json", ".db", "sqlite3",
 	}
-	
+
 	for _, b := range blocked {
 		if strings.Contains(cmdStr, b) {
 			log.Printf("🚨 [SECURITY] Blocked rogue AI command: %s\n", cmdStr)

@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bot/types"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -9,7 +10,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"bot/types"
 )
 
 func GenerateAIResponseWithTrace(sess *types.AISession, reasoning *strings.Builder, searchOutput *strings.Builder) (types.ChatMessage, error) {

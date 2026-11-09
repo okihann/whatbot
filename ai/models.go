@@ -23,7 +23,7 @@ func RefreshModels() {
 
 	log.Println("🔄 [MODELS] Refreshing active models concurrently...")
 	modelCache = make(map[string]CachedModel)
-	
+
 	var wg sync.WaitGroup
 	var localMu sync.Mutex
 
@@ -46,7 +46,7 @@ func RefreshModels() {
 			apiKey := p.GetNextKey()
 			req, _ := http.NewRequest("GET", endpoint, nil)
 			req.Header.Set("Authorization", "Bearer "+apiKey)
-            req.Header.Set("User-Agent", "Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+			req.Header.Set("User-Agent", "Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
 			req.Header.Set("Accept", "application/json, text/plain, */*")
 			req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
@@ -76,9 +76,9 @@ func RefreshModels() {
 				count := 0
 				for _, rm := range rawModels {
 					if m, ok := rm.(map[string]interface{}); ok {
-						
+
 						isFree := true
-						
+
 						if pricingMap, ok := m["pricing"].(map[string]interface{}); ok {
 							promptPrice := fmt.Sprintf("%v", pricingMap["prompt"])
 							if promptPrice != "0" && promptPrice != "0.0" && promptPrice != "0.00" && promptPrice != "<nil>" {
@@ -108,7 +108,7 @@ func RefreshModels() {
 
 						if id != "" {
 							prefixedName := fmt.Sprintf("%s/%s", p.Name, id)
-							
+
 							localMu.Lock()
 							modelCache[prefixedName] = CachedModel{
 								Provider: p,
@@ -123,7 +123,7 @@ func RefreshModels() {
 			}
 		}(provider)
 	}
-	
+
 	wg.Wait()
 	log.Printf("🎉 [MODELS] Total active prefixed FREE models registered: %d\n", len(modelCache))
 }

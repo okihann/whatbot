@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 	"strings"
+	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -121,7 +121,7 @@ func executeTiktok(client *whatsmeow.Client, msg *events.Message, args []string)
 			FileEncSHA256: uploaded.FileEncSHA256,
 			FileLength:    proto.Uint64(uploaded.FileLength),
 			Caption:       proto.String(title),
-            Seconds:       proto.Uint32(uint32(videoInfo.Duration)),
+			Seconds:       proto.Uint32(uint32(videoInfo.Duration)),
 		}
 
 		_, err = client.SendMessage(context.Background(), chatJID, &waE2E.Message{VideoMessage: videoMsg})
