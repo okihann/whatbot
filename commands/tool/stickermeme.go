@@ -34,9 +34,16 @@ func executeStickerMeme(client *whatsmeow.Client, msg *events.Message, args []st
 		catboxUserHash = strings.TrimSpace(conf.Downloader.CatboxUserHash)
 	}
 
+	if len(args) == 0 {
+		utils.SendReply(client, msg.Info.Chat, "⚠️ Usage:\n• Reply to an image: `/smeme TOP | BOTTOM`\n• Or just `/smeme some text` to get a brat sticker")
+		return
+	}
+
 	mediaMsg := utils.GetMediaMessage(msg.Message)
-	if mediaMsg == nil || len(args) == 0 {
-		utils.SendReply(client, msg.Info.Chat, "⚠️ Reply to an image with `/smeme TOP TEXT | BOTTOM TEXT`")
+
+	// No image replied to -> render a brat sticker from the text instead.
+	if mediaMsg == nil {
+		executeBratSticker(client, msg, strings.Join(args, " "))
 		return
 	}
 
