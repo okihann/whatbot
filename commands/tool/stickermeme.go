@@ -48,22 +48,17 @@ func executeStickerMeme(client *whatsmeow.Client, msg *events.Message, args []st
 
 	data, err := client.Download(context.Background(), media)
 	if err != nil {
-		utils.SendReply(client, msg.Info.Chat, "❌ Failed to download the original image.")
+		utils.SendReply(client, msg.Info.Chat, "❌ Failed to download the original image: "+err.Error())
 		return
 	}
 
-	// memegen gives nicer typography; fall back to the local renderer if the
-	// upload or the render fails, so the command never hard-depends on it.
 	pngData, err := renderMemegen(data, top, bottom)
 	if err != nil {
-		pngData, err = renderMemePNG(data, top, bottom)
-	}
-	if err != nil {
-		utils.SendReply(client, msg.Info.Chat, "❌ Could not render that meme.")
+		utils.SendReply(client, msg.Info.Chat, "❌ Could not render that meme: "+err.Error())
 		return
 	}
 
 	if err := sendStickerPNG(client, msg, pngData); err != nil {
-		utils.SendReply(client, msg.Info.Chat, "❌ Failed to send the sticker.")
+		utils.SendReply(client, msg.Info.Chat, "❌ Failed to send the sticker: "+err.Error())
 	}
 }
