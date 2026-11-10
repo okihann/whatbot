@@ -1,77 +1,110 @@
 package tool
 
 import (
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+
 	"bot/handlers"
 	"bot/session"
 	"bot/types"
 	"bot/utils"
-	"fmt"
-	"sort"
-	"strings"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types/events"
 )
 
-const menuSessionType = "menu"
+const (
+	menuSessionType = "menu"
+	menuPageSize    = 3
+)
+
+type menuState struct {
+	Categories []string
+	Page       int
+}
 
 func init() {
 	handlers.RegisterCommand(types.Command{
 		Name:        "menu",
-		Description: "Interactive menu with tappable category buttons.",
+		Description: "Category menu with tappable buttons.",
 		Category:    "main",
 		Execute:     executeMenu,
 	})
 	handlers.RegisterInteractiveSessionHandler(handleMenuInteraction)
 }
 
-// executeMenu sends an interactive message with up to 3 category buttons and
-// registers a session so we can handle both button taps and numeric replies.
 func executeMenu(client *whatsmeow.Client, msg *events.Message, args []string) {
-	categories := listCategories()
-	if len(categories) == 0 {
+	cats := menuCategories()
+	if len(cats) == 0 {
 		utils.SendReply(client, msg.Info.Chat, "No commands registered yet.")
 		return
 	}
+	sendMenuPage(client, msg, &menuState{Categories: cats})
+}
 
-	shown := categories
-	if len(shown) > 3 {
-		shown = shown[:3]
+func sendMenuPage(client *whatsmeow.Client, msg *events.Message, st *menuState) {
+	start := st.Page * menuPageSize
+	if start >= len(st.Categories) {
+		utils.SendReply(client, msg.Info.Chat, "No more categories.")
+		return
 	}
 
-	buttons := make([]utils.QuickReply, 0, len(shown))
-	for _, c := range shown {
+	remaining := len(st.Categories) - start
+	show := menuPageSize
+	if remaining > menuPageSize {
+		show = menuPageSize - 1 // reserve the last slot for "More"
+	}
+
+	var buttons []utils.QuickReply
+	for _, c := range st.Categories[start : start+show] {
+		buttons = append(buttons, utils.QuickReply{ID: "cat:" + c, Text: categoryLabel(c)})
+	}
+	if remaining > menuPageSize {
 		buttons = append(buttons, utils.QuickReply{
-			ID:   "cat:" + c,
-			Text: handlers.Title(c),
+			ID:   fmt.Sprintf("menu:page:%d", st.Page+1),
+			Text: "More ▸",
 		})
 	}
 
-	body := "Tap a category to see its commands.\n\nReply with a number as a fallback:\n" + utils.RenderButtonsAsText(buttons)
+	body := "Tap a category, or reply with its number:\n\n" + utils.RenderButtonsAsText(buttons)
+	title := "📋 Main Menu"
+	if st.Page > 0 {
+		title = fmt.Sprintf("📋 Main Menu (page %d)", st.Page+1)
+	}
 
-	resp, err := utils.SendButtons(client, msg.Info.Chat, "📋 Main Menu", body, "Auto-closes in 30s", buttons)
+	resp, err := utils.SendButtons(client, msg.Info.Chat, title, body, "Auto-closes in 30s", buttons)
 	if err != nil {
-		utils.SendReply(client, msg.Info.Chat, "📋 *Main Menu*\n\n"+body)
+		utils.SendReply(client, msg.Info.Chat, title+"\n\n"+body)
 		return
 	}
 
 	session.StoreInteractiveSession(resp.ID, &session.InteractiveSession{
 		Type:   menuSessionType,
 		UserID: msg.Info.Sender.ToNonAD().String(),
-		Data:   shown,
+		Data:   st,
 	})
 }
 
-// handleMenuInteraction resolves both button taps and plain numeric replies.
 func handleMenuInteraction(client *whatsmeow.Client, msg *events.Message) bool {
-	// 1. Button tap: arrives as an interactive/button response.
-	if id := utils.ExtractButtonID(msg.Message); strings.HasPrefix(id, "cat:") {
-		cat := strings.TrimPrefix(id, "cat:")
-		sendCategoryMenu(client, msg, cat)
-		return true
+	if id := utils.ExtractButtonID(msg.Message); id != "" {
+		switch {
+		case strings.HasPrefix(id, "cat:"):
+			sendCategoryMenu(client, msg, strings.TrimPrefix(id, "cat:"))
+			return true
+		case strings.HasPrefix(id, "menu:page:"):
+			page, err := strconv.Atoi(strings.TrimPrefix(id, "menu:page:"))
+			if err != nil {
+				return true
+			}
+			// Categories are derived from the registry, so rebuild rather than
+			// depending on the button message still having a live session.
+			sendMenuPage(client, msg, &menuState{Categories: menuCategories(), Page: page})
+			return true
+		}
 	}
 
-	// 2. Numeric reply to the menu message.
 	ctxInfo := msg.Message.GetExtendedTextMessage().GetContextInfo()
 	if ctxInfo == nil || ctxInfo.StanzaID == nil {
 		return false
@@ -84,57 +117,82 @@ func handleMenuInteraction(client *whatsmeow.Client, msg *events.Message) bool {
 		return true
 	}
 
-	text := strings.TrimSpace(utils.GetTextFromMessage(msg.Message))
-	var choice int
-	if _, err := fmt.Sscanf(text, "%d", &choice); err != nil || choice < 1 {
+	st, ok := sess.Data.(*menuState)
+	if !ok {
 		return false
 	}
-	cats, _ := sess.Data.([]string)
-	if choice > len(cats) {
+
+	choice, err := strconv.Atoi(strings.TrimSpace(utils.GetTextFromMessage(msg.Message)))
+	if err != nil || choice < 1 {
+		return false
+	}
+
+	start := st.Page * menuPageSize
+	remaining := len(st.Categories) - start
+	show := menuPageSize
+	if remaining > menuPageSize {
+		show = menuPageSize - 1
+	}
+	if choice > show {
 		return false
 	}
 
 	session.ClearInteractiveSession(ctxInfo.GetStanzaID())
-	sendCategoryMenu(client, msg, cats[choice-1])
+	sendCategoryMenu(client, msg, st.Categories[start+choice-1])
 	return true
 }
 
 func sendCategoryMenu(client *whatsmeow.Client, msg *events.Message, category string) {
-	var cmds []string
+	var names []string
 	for _, c := range handlers.Commands {
 		if c.Category == category {
-			cmds = append(cmds, c.Name)
+			names = append(names, c.Name)
 		}
 	}
-	if len(cmds) == 0 {
+	if len(names) == 0 {
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Category '%s' has no commands.", category))
 		return
 	}
-	sort.Strings(cmds)
+	sort.Strings(names)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "╭─「 %s %s Menu 」\n", categoryEmoji(category), handlers.Title(category))
-	for _, name := range cmds {
-		fmt.Fprintf(&b, "│ ◦ /%s\n", name)
+	for _, n := range names {
+		fmt.Fprintf(&b, "│ ◦ /%s\n", n)
 	}
 	b.WriteString("╰────")
 	utils.SendReply(client, msg.Info.Chat, b.String())
 }
 
-func listCategories() []string {
-	seen := map[string]struct{}{}
+// menuCategories lists user-facing categories in a stable, friendly order.
+func menuCategories() []string {
+	preferred := []string{"downloader", "search", "tools", "media", "anime"}
+
+	seen := map[string]bool{}
 	for _, c := range handlers.Commands {
-		if c.Category == "" || c.Category == "owner" {
-			continue
+		if c.Category != "" && c.Category != "owner" && c.Category != "main" {
+			seen[c.Category] = true
 		}
-		seen[c.Category] = struct{}{}
 	}
-	out := make([]string, 0, len(seen))
+
+	var out []string
+	for _, c := range preferred {
+		if seen[c] {
+			out = append(out, c)
+			delete(seen, c)
+		}
+	}
+
+	rest := make([]string, 0, len(seen))
 	for c := range seen {
-		out = append(out, c)
+		rest = append(rest, c)
 	}
-	sort.Strings(out)
-	return out
+	sort.Strings(rest)
+	return append(out, rest...)
+}
+
+func categoryLabel(category string) string {
+	return categoryEmoji(category) + " " + handlers.Title(category)
 }
 
 func categoryEmoji(category string) string {

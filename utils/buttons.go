@@ -2,7 +2,6 @@ package utils
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -12,21 +11,17 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// QuickReply is a single tappable button shown to the user.
+// QuickReply is a single tappable button.
 type QuickReply struct {
 	ID   string
 	Text string
 }
 
-type buttonParams struct {
-	DisplayText string `json:"display_text"`
-	ID          string `json:"id"`
-}
-
-// SendButtons sends a WhatsApp interactive message with quick-reply buttons.
-// Returns the sent message (so the caller can track replies) along with an error.
-// If the user's client doesn't support buttons, WhatsApp normally falls back to
-// a text listing handled by the caller — but we also ship a plain-text mirror.
+// SendButtons sends a legacy ButtonsMessage.
+//
+// whatsmeow only wraps an outgoing message in WhatsApp's interactive envelope
+// when getButtonTypeFromMessage recognises the type (send.go). InteractiveMessage
+// is not in that switch, ButtonsMessage is - so that is what we send.
 func SendButtons(client *whatsmeow.Client, jid waTypes.JID, title, body, footer string, buttons []QuickReply) (whatsmeow.SendResponse, error) {
 	if len(buttons) == 0 {
 		return whatsmeow.SendResponse{}, fmt.Errorf("no buttons provided")
@@ -35,62 +30,51 @@ func SendButtons(client *whatsmeow.Client, jid waTypes.JID, title, body, footer 
 		buttons = buttons[:3]
 	}
 
-	nfButtons := make([]*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton, 0, len(buttons))
+	btns := make([]*waE2E.ButtonsMessage_Button, 0, len(buttons))
 	for _, b := range buttons {
-		params, _ := json.Marshal(buttonParams{DisplayText: b.Text, ID: b.ID})
-		nfButtons = append(nfButtons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
-			Name:             proto.String("quick_reply"),
-			ButtonParamsJSON: proto.String(string(params)),
+		btns = append(btns, &waE2E.ButtonsMessage_Button{
+			ButtonID:   proto.String(b.ID),
+			ButtonText: &waE2E.ButtonsMessage_Button_ButtonText{DisplayText: proto.String(b.Text)},
+			Type:       waE2E.ButtonsMessage_Button_RESPONSE.Enum(),
 		})
 	}
 
 	msg := &waE2E.Message{
-		InteractiveMessage: &waE2E.InteractiveMessage{
-			Header: &waE2E.InteractiveMessage_Header{Title: proto.String(title)},
-			Body:   &waE2E.InteractiveMessage_Body{Text: proto.String(body)},
-			Footer: &waE2E.InteractiveMessage_Footer{Text: proto.String(footer)},
-			InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
-				NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
-					Buttons: nfButtons,
-				},
-			},
+		ButtonsMessage: &waE2E.ButtonsMessage{
+			HeaderType:  waE2E.ButtonsMessage_TEXT.Enum(),
+			Header:      &waE2E.ButtonsMessage_Text{Text: title},
+			ContentText: proto.String(body),
+			FooterText:  proto.String(footer),
+			Buttons:     btns,
 		},
 	}
-
 	return client.SendMessage(context.Background(), jid, msg)
 }
 
-// RenderButtonsAsText is the fallback used by callers when a user replies with
-// plain text instead of tapping a button.
+// RenderButtonsAsText is the fallback listing for clients without button support.
 func RenderButtonsAsText(buttons []QuickReply) string {
 	var b strings.Builder
 	for i, br := range buttons {
-		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, br.Text))
+		fmt.Fprintf(&b, "%d. %s\n", i+1, br.Text)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// ExtractButtonID pulls the chosen button ID out of a button/interactive reply.
-// Returns "" if the message is not a button response.
+// ExtractButtonID returns the chosen button ID, or "" for non-button messages.
 func ExtractButtonID(msg *waE2E.Message) string {
 	if msg == nil {
 		return ""
-	}
-	if ir := msg.GetInteractiveResponseMessage(); ir != nil {
-		if nf := ir.GetNativeFlowResponseMessage(); nf != nil {
-			var payload struct {
-				ID string `json:"id"`
-			}
-			if err := json.Unmarshal([]byte(nf.GetParamsJSON()), &payload); err == nil && payload.ID != "" {
-				return payload.ID
-			}
-		}
 	}
 	if br := msg.GetButtonsResponseMessage(); br != nil {
 		return br.GetSelectedButtonID()
 	}
 	if tr := msg.GetTemplateButtonReplyMessage(); tr != nil {
 		return tr.GetSelectedID()
+	}
+	if ir := msg.GetInteractiveResponseMessage(); ir != nil {
+		if nf := ir.GetNativeFlowResponseMessage(); nf != nil {
+			return nf.GetParamsJSON()
+		}
 	}
 	return ""
 }
