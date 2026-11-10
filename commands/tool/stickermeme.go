@@ -52,7 +52,12 @@ func executeStickerMeme(client *whatsmeow.Client, msg *events.Message, args []st
 		return
 	}
 
-	pngData, err := renderMemePNG(data, top, bottom)
+	// memegen gives nicer typography; fall back to the local renderer if the
+	// upload or the render fails, so the command never hard-depends on it.
+	pngData, err := renderMemegen(data, top, bottom)
+	if err != nil {
+		pngData, err = renderMemePNG(data, top, bottom)
+	}
 	if err != nil {
 		utils.SendReply(client, msg.Info.Chat, "❌ Could not render that meme.")
 		return
