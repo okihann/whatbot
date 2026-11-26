@@ -7,9 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -69,11 +67,13 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 	var docMsg *waE2E.DocumentMessage
 	var statusMsg *waE2E.Message
 
-	if msg.Message.GetImageMessage() != nil {
-		imgMsg = msg.Message.GetImageMessage()
-	} else if msg.Message.GetVideoMessage() != nil {
-		vidMsg = msg.Message.GetVideoMessage()
-	} else if quoted := msg.Message.GetExtendedTextMessage().GetContextInfo().GetQuotedMessage(); quoted != nil {
+	coreMsg := utils.UnwrapMessage(msg.Message)
+	if coreMsg.GetImageMessage() != nil {
+		imgMsg = coreMsg.GetImageMessage()
+	} else if coreMsg.GetVideoMessage() != nil {
+		vidMsg = coreMsg.GetVideoMessage()
+	} else if ctxInfo := utils.ExtractContextInfo(msg.Message); ctxInfo != nil && ctxInfo.QuotedMessage != nil {
+		quoted := utils.UnwrapMessage(ctxInfo.QuotedMessage)
 		if quoted.GetImageMessage() != nil {
 			imgMsg = quoted.GetImageMessage()
 		} else if quoted.GetVideoMessage() != nil {
@@ -81,7 +81,7 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 		} else if quoted.GetAudioMessage() != nil {
 			audioMsg = quoted.GetAudioMessage()
 		} else if quoted.GetDocumentMessage() != nil {
-			docMsg = quoted.GetDocumentMessage() // Intercept quoted documents
+			docMsg = quoted.GetDocumentMessage()
 		}
 	}
 
@@ -178,24 +178,12 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 			tempDir := "temp"
 			os.MkdirAll(tempDir, 0755)
 
-			// Save the video temporarily to memory
 			tempPath := filepath.Join(tempDir, fmt.Sprintf("status_vid_%d.mp4", time.Now().UnixNano()))
 			os.WriteFile(tempPath, data, 0644)
-			defer os.Remove(tempPath) // Guarantees the file is deleted immediately after
+			defer os.Remove(tempPath)
 
-			// 1. Extract a fast thumbnail using ffmpeg
-			thumbCmd := exec.Command("ffmpeg", "-i", tempPath, "-ss", "00:00:00", "-vframes", "1", "-vf", "scale=320:-1", "-f", "image2", "-")
-			jpegThumb, _ := thumbCmd.Output()
+			jpegThumb, seconds := utils.ExtractVideoMeta(tempPath)
 
-			// 2. Extract the exact duration using ffprobe
-			var seconds uint32
-			durCmd := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", tempPath)
-			if durBytes, err := durCmd.Output(); err == nil {
-				durFloat, _ := strconv.ParseFloat(strings.TrimSpace(string(durBytes)), 64)
-				seconds = uint32(durFloat)
-			}
-
-			// Upload as MediaVideo instead of Document
 			uploaded, err := client.Upload(context.Background(), data, whatsmeow.MediaVideo)
 			if err != nil {
 				utils.SendReply(client, msg.Info.Chat, "Failed to upload as video status. (File may exceed 16MB limit)")
@@ -212,8 +200,8 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 					FileEncSHA256: uploaded.FileEncSHA256,
 					FileLength:    proto.Uint64(uploaded.FileLength),
 					Caption:       proto.String(caption),
-					JPEGThumbnail: jpegThumb,             // <-- Thumbnail fixed!
-					Seconds:       proto.Uint32(seconds), // <-- Duration fixed!
+					JPEGThumbnail: jpegThumb,
+					Seconds:       proto.Uint32(seconds),
 				},
 			}
 		} else if strings.HasPrefix(mime, "image/") {

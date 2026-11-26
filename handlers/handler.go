@@ -104,7 +104,7 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 	}
 
 	// Interactive Help Menu Logic
-	ctxInfo := msg.Message.GetExtendedTextMessage().GetContextInfo()
+	ctxInfo := utils.ExtractContextInfo(msg.Message)
 	if ctxInfo != nil && ctxInfo.StanzaID != nil {
 		quotedMsgID := ctxInfo.GetStanzaID()
 		if helpSession, found := session.GetHelpSession(jid.String()); found && helpSession.MessageID == quotedMsgID {
@@ -139,32 +139,17 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 		return
 	}
 
-	// *** MODIFIED THIS SECTION FOR MULTI-LINE ARGUMENTS ***
 	commandAndArgs := strings.TrimPrefix(text, prefix)
 	parts := strings.SplitN(commandAndArgs, " ", 2)
 	commandName := strings.ToLower(parts[0])
 
 	var args []string
 	if len(parts) > 1 {
-		// The rest of the message is a single argument
 		args = []string{parts[1]}
-	} else {
-		args = []string{}
 	}
-	// *** END OF MODIFICATION ***
+
 	if cmd, ok := Commands[commandName]; ok {
-		isOwner := false
-		if msg.Info.IsFromMe {
-			isOwner = true
-		} else {
-			senderNum := msg.Info.Sender.ToNonAD().User
-			for _, ownerNum := range conf.Settings.OwnerJIDs {
-				if senderNum == ownerNum {
-					isOwner = true
-					break
-				}
-			}
-		}
+		isOwner := utils.IsOwner(client, msg, conf)
 
 		if cmd.Category == "owner" && !isOwner {
 			utils.SendReply(client, jid, "⛔ Access Denied: This command is restricted to the bot owner.")

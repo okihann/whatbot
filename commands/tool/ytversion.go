@@ -6,7 +6,7 @@ import (
 	"bot/utils"
 	"fmt"
 	"os/exec"
-	//"strings"
+	"strings"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types/events"
@@ -21,10 +21,8 @@ func init() {
 	})
 }
 
-// executeYtVersion runs yt-dlp --version
 func executeYtVersion(client *whatsmeow.Client, msg *events.Message, args []string) {
-	// A new, temporary function to get the path
-	ytDlpPath, cleanup, err := utils.GetYtDlpPathForVersionCheck()
+	ytDlpPath, cleanup, err := utils.GetYtDlpPath()
 	if err != nil {
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Failed to get yt-dlp path: %v", err))
 		return
@@ -38,5 +36,5 @@ func executeYtVersion(client *whatsmeow.Client, msg *events.Message, args []stri
 		return
 	}
 
-	utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Embedded yt-dlp version:\n`%s`", string(output)))
+	utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Embedded yt-dlp version:\n`%s`", strings.TrimSpace(string(output))))
 }

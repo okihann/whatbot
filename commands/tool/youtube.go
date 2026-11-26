@@ -6,10 +6,9 @@ import (
 	"bot/types"
 	"bot/utils"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,16 +20,34 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const inlineVideoMaxBytes = 16 * 1024 * 1024 // 16 MB safe inline video limit; larger sent as Document
+
 func init() {
-	// MP4 Commands
-	handlers.RegisterCommand(types.Command{Name: "ytmp4", Category: "downloader", Execute: executeYtmp4})
-	handlers.RegisterCommand(types.Command{Name: "yt", Category: "downloader", Execute: executeYtmp4})
+	handlers.RegisterCommand(types.Command{
+		Name:        "ytmp4",
+		Description: "Search or download a YouTube video as MP4.",
+		Category:    "downloader",
+		Execute:     executeYtmp4,
+	})
+	handlers.RegisterCommand(types.Command{
+		Name:        "yt",
+		Description: "Alias for /ytmp4.",
+		Category:    "downloader",
+		Execute:     executeYtmp4,
+	})
+	handlers.RegisterCommand(types.Command{
+		Name:        "ytmp3",
+		Description: "Search or download YouTube audio as MP3.",
+		Category:    "downloader",
+		Execute:     executeYtmp3,
+	})
+	handlers.RegisterCommand(types.Command{
+		Name:        "play",
+		Description: "Alias for /ytmp3.",
+		Category:    "downloader",
+		Execute:     executeYtmp3,
+	})
 
-	// MP3 Commands
-	handlers.RegisterCommand(types.Command{Name: "ytmp3", Category: "downloader", Execute: executeYtmp3})
-	handlers.RegisterCommand(types.Command{Name: "play", Category: "downloader", Execute: executeYtmp3})
-
-	// Interceptor
 	handlers.RegisterInteractiveSessionHandler(handleYTInteraction)
 }
 
@@ -42,26 +59,31 @@ func executeYtmp3(client *whatsmeow.Client, msg *events.Message, args []string) 
 	processYTCommand(client, msg, args, "ytmp3")
 }
 
+func isYouTubeLink(rawURL string) bool {
+	lower := strings.ToLower(rawURL)
+	return strings.Contains(lower, "youtube.com") || strings.Contains(lower, "youtu.be")
+}
+
 func processYTCommand(client *whatsmeow.Client, msg *events.Message, args []string, targetCmd string) {
 	senderID := msg.Info.Sender.ToNonAD().String()
-	fullArgString := strings.Join(args, " ")
+	fullArgString := strings.TrimSpace(strings.Join(args, " "))
 
 	if fullArgString == "" {
 		utils.SendReply(client, msg.Info.Chat, "⚠️ Please provide a YouTube link or a search query.")
 		return
 	}
 
-	// 1. Direct Link Bypass
-	if strings.Contains(fullArgString, "youtube.com") || strings.Contains(fullArgString, "youtu.be") {
+	// 1. Direct YouTube URL (handles extra share text around the link too).
+	if extracted := utils.ExtractURL(fullArgString); extracted != "" && isYouTubeLink(extracted) {
 		if targetCmd == "ytmp4" {
-			go downloadDirectYTVideo(client, msg, fullArgString)
+			go downloadDirectYTVideo(client, msg.Info.Chat, extracted)
 		} else {
-			go downloadDirectYTAudio(client, msg, fullArgString)
+			go downloadDirectYTAudio(client, msg.Info.Chat, extracted)
 		}
 		return
 	}
 
-	// 2. Search & Anti-Spam Lock
+	// 2. Interactive YouTube search.
 	if !session.AcquireLock(senderID, "youtube") {
 		utils.SendReply(client, msg.Info.Chat, "⏳ You already have an active YouTube search menu! Please wait 30 seconds for it to close.")
 		return
@@ -70,32 +92,17 @@ func processYTCommand(client *whatsmeow.Client, msg *events.Message, args []stri
 	utils.SendReply(client, msg.Info.Chat, "🔍 Searching YouTube...")
 
 	go func() {
-		ytDlpPath, cleanup, err := utils.GetYtDlpPathForVersionCheck()
+		results, err := utils.SearchYouTube(fullArgString, 20)
 		if err != nil {
-			return
-		}
-		defer cleanup()
-
-		cmdArgs := []string{fmt.Sprintf("ytsearch30:%s", fullArgString), "--dump-json", "--flat-playlist", "--no-warnings"}
-		out, err := exec.Command(ytDlpPath, cmdArgs...).CombinedOutput()
-		if err != nil {
+			fmt.Printf("[YOUTUBE] Search failed: %v\n", err)
 			session.ReleaseLock(senderID, "youtube")
-			utils.SendReply(client, msg.Info.Chat, "❌ Search failed.")
+			utils.SendReply(client, msg.Info.Chat, "❌ YouTube search failed.")
 			return
-		}
-
-		var results []utils.YTSearchResult
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		for _, line := range lines {
-			var data utils.YTSearchResult
-			if err := json.Unmarshal([]byte(line), &data); err == nil && data.URL != "" {
-				results = append(results, data)
-			}
 		}
 
 		if len(results) == 0 {
 			session.ReleaseLock(senderID, "youtube")
-			utils.SendReply(client, msg.Info.Chat, "❌ No results found.")
+			utils.SendReply(client, msg.Info.Chat, "❌ No YouTube results found.")
 			return
 		}
 
@@ -105,125 +112,133 @@ func processYTCommand(client *whatsmeow.Client, msg *events.Message, args []stri
 			Page:      0,
 			Data:      results,
 			UserID:    senderID,
-			TargetCmd: targetCmd, // Remembers if they want MP4 or MP3!
+			TargetCmd: targetCmd,
 		}
 
 		SendYTPage(client, msg.Info.Chat, sess)
 	}()
 }
 
-func downloadDirectYTVideo(client *whatsmeow.Client, msg *events.Message, videoURL string) {
-	utils.SendReply(client, msg.Info.Chat, "  Fetching video details...")
+func formatYTDlError(prefix string, err error) string {
+	if errors.Is(err, utils.ErrYouTubeBotCheck) {
+		return prefix + "\n\n⚠️ YouTube blocked this server's IP (bot check). Configure `cookiesFile` in `config.json` (or place a `cookies.txt` file in the bot folder) to authenticate downloads."
+	}
+	return prefix
+}
 
-	// Bumped back to 1080p because Documents have a 100MB+ limit!
+func downloadDirectYTVideo(client *whatsmeow.Client, chatJID waTypes.JID, videoURL string) {
+	utils.SendReply(client, chatJID, "⏳ Fetching YouTube video details...")
+
 	videoInfo, err := utils.GetVideoInfo(videoURL, "1080")
 	if err != nil {
-		utils.SendReply(client, msg.Info.Chat, "  Failed to fetch video details.")
+		fmt.Printf("[YOUTUBE] Info error: %v\n", err)
+		utils.SendReply(client, chatJID, formatYTDlError("❌ Failed to fetch video details.", err))
 		return
 	}
 
-	utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("  *[ YOUTUBE VIDEO ]*\n\n*Title:* %s\n\nProcessing high-quality video document...", videoInfo.Title))
+	title := videoInfo.Title
+	if title == "" {
+		title = "YouTube Video"
+	}
 
-	tempDir := "temp"
-	os.MkdirAll(tempDir, 0755)
-	outputFile := filepath.Join(tempDir, fmt.Sprintf("video_%d.mp4", time.Now().Unix()))
-	defer os.Remove(outputFile)
+	utils.SendReply(client, chatJID, fmt.Sprintf("🎬 *[ YOUTUBE VIDEO ]*\n\n*Title:* %s\n\n⏳ Downloading and preparing video...", title))
 
+	workDir, err := os.MkdirTemp("", "whatbot-yt-*")
+	if err != nil {
+		utils.SendReply(client, chatJID, "❌ Could not create temporary workspace.")
+		return
+	}
+	defer os.RemoveAll(workDir)
+
+	outputFile := filepath.Join(workDir, fmt.Sprintf("video_%d.mp4", time.Now().UnixNano()))
 	if err := utils.DownloadVideo(videoURL, outputFile, "1080"); err != nil {
-		fmt.Printf("  DOWNLOAD ERROR: %v\n", err)
-		utils.SendReply(client, msg.Info.Chat, "  Video download failed.")
+		fmt.Printf("[YOUTUBE] Video download error: %v\n", err)
+		utils.SendReply(client, chatJID, formatYTDlError("❌ Video download failed.", err))
 		return
 	}
 
 	videoData, err := os.ReadFile(outputFile)
 	if err != nil {
-		fmt.Printf("  FILE READ ERROR: %v\n", err)
-		utils.SendReply(client, msg.Info.Chat, "  Failed to read downloaded video file.")
+		fmt.Printf("[YOUTUBE] File read error: %v\n", err)
+		utils.SendReply(client, chatJID, "❌ Failed to read downloaded video file.")
 		return
 	}
 
-	// Upload as a Document to bypass strict video size limits
-	uploaded, err := client.Upload(context.Background(), videoData, whatsmeow.MediaDocument)
-	if err != nil {
-		fmt.Printf("  UPLOAD ERROR: %v\n", err)
-		utils.SendReply(client, msg.Info.Chat, "  Failed to upload document to WhatsApp servers.")
+	ctx := context.Background()
+	if len(videoData) <= inlineVideoMaxBytes {
+		thumb, seconds := utils.ExtractVideoMeta(outputFile)
+		if seconds == 0 && videoInfo.Duration > 0 {
+			seconds = uint32(videoInfo.Duration)
+		}
+		if _, err := utils.SendVideoData(ctx, client, chatJID, videoData, title, seconds, thumb); err != nil {
+			fmt.Printf("[YOUTUBE] Video send error: %v\n", err)
+			utils.SendReply(client, chatJID, "❌ Failed to send video to WhatsApp.")
+		}
 		return
 	}
 
-	// Construct a Document Message
-	docMsg := &waE2E.DocumentMessage{
-		URL:           proto.String(uploaded.URL),
-		DirectPath:    proto.String(uploaded.DirectPath),
-		MediaKey:      uploaded.MediaKey,
-		Mimetype:      proto.String("video/mp4"),
-		FileName:      proto.String(videoInfo.Title + ".mp4"), // Ensures it has a playable file extension
-		FileSHA256:    uploaded.FileSHA256,
-		FileEncSHA256: uploaded.FileEncSHA256,
-		FileLength:    proto.Uint64(uploaded.FileLength),
-		Caption:       proto.String(videoInfo.Title),
-	}
-
-	_, err = client.SendMessage(context.Background(), msg.Info.Chat, &waE2E.Message{DocumentMessage: docMsg})
-	if err != nil {
-		fmt.Printf("  SEND MESSAGE ERROR: %v\n", err)
-		utils.SendReply(client, msg.Info.Chat, "  Failed to send document message.")
+	// Videos larger than 16MB are sent as DocumentMessage to bypass WhatsApp's
+	// stricter inline video size limit while keeping full quality.
+	fileName := utils.SanitizeFilename(title) + ".mp4"
+	if _, err := utils.SendDocumentData(ctx, client, chatJID, videoData, "video/mp4", fileName, title); err != nil {
+		fmt.Printf("[YOUTUBE] Document send error: %v\n", err)
+		utils.SendReply(client, chatJID, "❌ Failed to send video document to WhatsApp.")
 	}
 }
 
-func downloadDirectYTAudio(client *whatsmeow.Client, msg *events.Message, videoURL string) {
-	utils.SendReply(client, msg.Info.Chat, "⏳ Fetching audio details...")
+func downloadDirectYTAudio(client *whatsmeow.Client, chatJID waTypes.JID, videoURL string) {
+	utils.SendReply(client, chatJID, "⏳ Fetching YouTube audio details...")
 
 	videoInfo, err := utils.GetVideoInfo(videoURL, "best")
 	if err != nil {
-		utils.SendReply(client, msg.Info.Chat, "❌ Failed to fetch audio details.")
+		fmt.Printf("[YOUTUBE] Audio info error: %v\n", err)
+		utils.SendReply(client, chatJID, formatYTDlError("❌ Failed to fetch audio details.", err))
 		return
 	}
 
-	utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("🎧 *[ YOUTUBE AUDIO ]*\n\n*Title:* %s\n\nProcessing MP3...", videoInfo.Title))
-
-	ytDlpPath, ytCleanup, _ := utils.GetYtDlpPathForVersionCheck()
-	defer ytCleanup()
-	ffmpegPath, ffCleanup, _ := utils.GetFFmpegPath()
-	defer ffCleanup()
-
-	tempDir := "temp"
-	os.MkdirAll(tempDir, 0755)
-	outputFile := filepath.Join(tempDir, fmt.Sprintf("audio_%d.mp3", time.Now().Unix()))
-	defer os.Remove(outputFile)
-
-	args := []string{
-		"-f", "bestaudio",
-		"-x", "--audio-format", "mp3",
-		"-o", outputFile,
-		"--ffmpeg-location", ffmpegPath,
-		"--no-warnings", videoURL,
+	title := videoInfo.Title
+	if title == "" {
+		title = "YouTube Audio"
 	}
 
-	if err := exec.Command(ytDlpPath, args...).Run(); err != nil {
-		utils.SendReply(client, msg.Info.Chat, "❌ Audio download failed.")
+	utils.SendReply(client, chatJID, fmt.Sprintf("🎧 *[ YOUTUBE AUDIO ]*\n\n*Title:* %s\n\n⏳ Downloading and converting to MP3...", title))
+
+	workDir, err := os.MkdirTemp("", "whatbot-yta-*")
+	if err != nil {
+		utils.SendReply(client, chatJID, "❌ Could not create temporary workspace.")
+		return
+	}
+	defer os.RemoveAll(workDir)
+
+	outputFile := filepath.Join(workDir, fmt.Sprintf("audio_%d.mp3", time.Now().UnixNano()))
+	if err := utils.DownloadAudioMP3(videoURL, outputFile); err != nil {
+		fmt.Printf("[YOUTUBE] Audio download error: %v\n", err)
+		utils.SendReply(client, chatJID, formatYTDlError("❌ Audio download failed.", err))
 		return
 	}
 
 	audioData, err := os.ReadFile(outputFile)
 	if err != nil {
+		fmt.Printf("[YOUTUBE] Audio read error: %v\n", err)
+		utils.SendReply(client, chatJID, "❌ Failed to read downloaded audio file.")
 		return
 	}
 
-	uploaded, err := client.Upload(context.Background(), audioData, whatsmeow.MediaAudio)
-	if err != nil {
-		fmt.Printf("\n❌ UPLOAD ERROR: Failed to upload video to WhatsApp: %v\n", err)
-		utils.SendReply(client, msg.Info.Chat, "❌ Failed to upload the video to WhatsApp servers. Check the console for details.")
-		return
+	if _, err := utils.SendAudioData(context.Background(), client, chatJID, audioData, "audio/mpeg", uint32(videoInfo.Duration), false); err != nil {
+		fmt.Printf("[YOUTUBE] Audio send error: %v\n", err)
+		utils.SendReply(client, chatJID, "❌ Failed to upload audio to WhatsApp.")
 	}
+}
 
-	audioMsg := &waE2E.AudioMessage{
-		URL: proto.String(uploaded.URL), DirectPath: proto.String(uploaded.DirectPath),
-		MediaKey: uploaded.MediaKey, Mimetype: proto.String("audio/mpeg"),
-		FileSHA256: uploaded.FileSHA256, FileEncSHA256: uploaded.FileEncSHA256,
-		FileLength: proto.Uint64(uploaded.FileLength),
-		Seconds:    proto.Uint32(uint32(videoInfo.Duration)),
+func formatYTDuration(seconds float64) string {
+	total := int(seconds)
+	if total <= 0 {
+		return "LIVE"
 	}
-	client.SendMessage(context.Background(), msg.Info.Chat, &waE2E.Message{AudioMessage: audioMsg})
+	if total >= 3600 {
+		return fmt.Sprintf("%d:%02d:%02d", total/3600, (total%3600)/60, total%60)
+	}
+	return fmt.Sprintf("%02d:%02d", total/60, total%60)
 }
 
 func SendYTPage(client *whatsmeow.Client, chatJID waTypes.JID, sess *session.InteractiveSession) {
@@ -239,22 +254,25 @@ func SendYTPage(client *whatsmeow.Client, chatJID waTypes.JID, sess *session.Int
 		formatType = "MP3 AUDIO"
 	}
 
-	text := fmt.Sprintf("🔍 *YouTube Search: %s*\nFormat: %s | Page %d\n\n", sess.Query, formatType, sess.Page+1)
+	var b strings.Builder
+	fmt.Fprintf(&b, "🔍 *YouTube Search: %s*\nFormat: %s | Page %d\n\n", sess.Query, formatType, sess.Page+1)
 	for i := start; i < end; i++ {
-		text += fmt.Sprintf("*%d.* %s (%02d:%02d)\n", (i-start)+1, results[i].Title, int(results[i].Duration)/60, int(results[i].Duration)%60)
+		fmt.Fprintf(&b, "*%d.* %s (%s)\n", (i-start)+1, results[i].Title, formatYTDuration(results[i].Duration))
 	}
-	text += "\nReply with a number *(1-10)* to download.\nReply with *+* for next page, *-* for previous.\n_(Closes in 30s)_"
+	b.WriteString("\nReply with a number *(1-10)* to download.\nReply with *+* for next page, *-* for previous.\n_(Closes in 30s)_")
 
 	sentMsg, err := client.SendMessage(context.Background(), chatJID, &waE2E.Message{
-		ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String(text)},
+		ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String(b.String())},
 	})
-	if err == nil {
-		session.StoreInteractiveSession(sentMsg.ID, sess)
+	if err != nil {
+		session.ReleaseLock(sess.UserID, "youtube")
+		return
 	}
+	session.StoreInteractiveSession(sentMsg.ID, sess)
 }
 
 func handleYTInteraction(client *whatsmeow.Client, msg *events.Message) bool {
-	ctxInfo := msg.Message.GetExtendedTextMessage().GetContextInfo()
+	ctxInfo := utils.ExtractContextInfo(msg.Message)
 	if ctxInfo == nil || ctxInfo.StanzaID == nil {
 		return false
 	}
@@ -299,14 +317,12 @@ func handleYTInteraction(client *whatsmeow.Client, msg *events.Message) bool {
 		realIndex := (sess.Page * 10) + (selection - 1)
 		if realIndex < len(results) {
 			targetVideo := results[realIndex]
-
-			// CLEAR THE SESSION (Releases memory, unlocks the user, and stops the timer)
 			session.ClearInteractiveSession(*ctxInfo.StanzaID)
 
 			if sess.TargetCmd == "ytmp4" {
-				go downloadDirectYTVideo(client, msg, targetVideo.URL)
+				go downloadDirectYTVideo(client, msg.Info.Chat, targetVideo.URL)
 			} else {
-				go downloadDirectYTAudio(client, msg, targetVideo.URL)
+				go downloadDirectYTAudio(client, msg.Info.Chat, targetVideo.URL)
 			}
 		}
 		return true

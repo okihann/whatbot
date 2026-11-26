@@ -9,15 +9,13 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
-	waTypes "go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	"google.golang.org/protobuf/proto"
 )
 
 func init() {
 	handlers.RegisterCommand(types.Command{
 		Name:        "get",
-		Description: "Downloads the replied-to media and sends it to your private chat.",
+		Description: "Downloads the replied-to media (including view-once) and sends it to your private chat.",
 		Category:    "tools",
 		Execute:     executeGet,
 	})
@@ -30,120 +28,97 @@ func init() {
 }
 
 func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
-	ctxInfo := msg.Message.GetExtendedTextMessage().GetContextInfo()
-	if ctxInfo == nil || ctxInfo.QuotedMessage == nil {
-		utils.SendReply(client, msg.Info.Chat, "Please reply to a media message to use this command.")
+	ctxInfo := utils.ExtractContextInfo(msg.Message)
+	if ctxInfo == nil || (ctxInfo.QuotedMessage == nil && ctxInfo.GetStanzaID() == "") {
+		utils.SendReply(client, msg.Info.Chat, "⚠️ Please reply to a media or view-once message to use `/get`.")
 		return
 	}
 
-	utils.SendReply(client, msg.Info.Chat, "Processing media, please wait...")
+	botID := ""
+	if client.Store != nil && client.Store.ID != nil {
+		botID = client.Store.ID.ToNonAD().User
+	}
 
+	quotedID := ctxInfo.GetStanzaID()
 	quotedMsg := utils.UnwrapMessage(ctxInfo.QuotedMessage)
+	cached, hasCached := utils.DefaultMessageCache.Get(botID, quotedID)
 
-	var data []byte
-	var err error
-	var mediaType whatsmeow.MediaType
-	var origCaption string // Variable to hold the extracted caption
+	// Pick the best available media template and any eagerly cached bytes.
+	// View-once replies often strip URL/DirectPath on the quoted stub while
+	// the cached original message still has full metadata or pre-downloaded bytes.
+	var candidates []*waE2E.Message
+	var preDownloaded []byte
+	var isViewOnce bool
 
-	if quotedMsg.ImageMessage != nil {
-		mediaType = whatsmeow.MediaImage
-		if quotedMsg.ImageMessage.Caption != nil {
-			origCaption = *quotedMsg.ImageMessage.Caption
+	if hasCached && cached != nil {
+		if len(cached.MediaData) > 0 {
+			preDownloaded = cached.MediaData
 		}
-		data, err = client.Download(context.Background(), quotedMsg.ImageMessage)
-	} else if quotedMsg.VideoMessage != nil {
-		mediaType = whatsmeow.MediaVideo
-		if quotedMsg.VideoMessage.Caption != nil {
-			origCaption = *quotedMsg.VideoMessage.Caption
+		if cached.IsViewOnce {
+			isViewOnce = true
 		}
-		data, err = client.Download(context.Background(), quotedMsg.VideoMessage)
-	} else if quotedMsg.AudioMessage != nil {
-		mediaType = whatsmeow.MediaAudio
-		data, err = client.Download(context.Background(), quotedMsg.AudioMessage)
-	} else if quotedMsg.StickerMessage != nil {
-		mediaType = whatsmeow.MediaImage
-		data, err = client.Download(context.Background(), quotedMsg.StickerMessage)
-	} else if quotedMsg.DocumentMessage != nil {
-		mediaType = whatsmeow.MediaDocument
-		if quotedMsg.DocumentMessage.Caption != nil {
-			origCaption = *quotedMsg.DocumentMessage.Caption
+	}
+	if utils.IsViewOnceMessage(nil, ctxInfo.QuotedMessage) {
+		isViewOnce = true
+	}
+
+	// Prefer the candidate that actually has downloadable URL/DirectPath.
+	if hasCached && cached != nil && utils.HasDownloadableMedia(cached.Message) {
+		candidates = append(candidates, cached.Message)
+	}
+	if utils.HasDownloadableMedia(quotedMsg) {
+		candidates = append(candidates, quotedMsg)
+	}
+	// If neither has URL/DirectPath but we still have pre-cached bytes or a media
+	// skeleton, include them so pre-downloaded bytes can still be re-uploaded.
+	if len(candidates) == 0 {
+		if hasCached && cached != nil && utils.IsMediaMessage(cached.Message) {
+			candidates = append(candidates, cached.Message)
+		} else if utils.IsMediaMessage(quotedMsg) {
+			candidates = append(candidates, quotedMsg)
 		}
-		data, err = client.Download(context.Background(), quotedMsg.DocumentMessage)
-	} else {
-		utils.SendReply(client, msg.Info.Chat, "The replied-to message does not contain any downloadable media.")
+	}
+
+	if len(candidates) == 0 {
+		utils.SendReply(client, msg.Info.Chat, "⚠️ The replied-to message does not contain any downloadable media.")
 		return
 	}
 
-	if err != nil {
-		fmt.Printf("Failed to download media: %v\n", err)
-		utils.SendReply(client, msg.Info.Chat, "Sorry, I couldn't download that media.")
-		return
-	}
+	recipientJID := utils.ResolvePrivateChatJID(client, msg)
+	chatJID := msg.Info.Chat
 
-	uploadedMedia, err := client.Upload(context.Background(), data, mediaType)
-	if err != nil {
-		fmt.Printf("Failed to upload media: %v\n", err)
-		utils.SendReply(client, msg.Info.Chat, "Sorry, I couldn't process the media to send it.")
-		return
-	}
+	utils.SendReply(client, chatJID, "⏳ Processing media, please wait...")
 
-	var finalMessage waE2E.Message
+	go func() {
+		ctx := context.Background()
+		var lastErr error
 
-	// Construct the new caption
-	finalCaption := "Here is the media you requested!"
-	if origCaption != "" {
-		finalCaption += "\n\n_Original Caption:_\n" + origCaption
-	}
+		for i, candidate := range candidates {
+			origCaption := utils.MediaCaption(candidate)
+			caption := "Here is the media you requested!"
+			if isViewOnce {
+				caption = "👁️ *[View-Once Recovered]*\nHere is the media you requested!"
+			}
+			if origCaption != "" {
+				caption += "\n\n_Original Caption:_\n" + origCaption
+			}
 
-	if quotedMsg.ImageMessage != nil {
-		finalMessage.ImageMessage = &waE2E.ImageMessage{
-			URL: proto.String(uploadedMedia.URL), DirectPath: proto.String(uploadedMedia.DirectPath), MediaKey: uploadedMedia.MediaKey,
-			Mimetype: proto.String("image/jpeg"), FileEncSHA256: uploadedMedia.FileEncSHA256, FileSHA256: uploadedMedia.FileSHA256,
-			FileLength: proto.Uint64(uploadedMedia.FileLength), Caption: proto.String(finalCaption),
+			var bytesToUse []byte
+			if i == 0 && len(preDownloaded) > 0 {
+				bytesToUse = preDownloaded
+			}
+
+			err := utils.ForwardPermanentMedia(ctx, client, recipientJID, candidate, bytesToUse, caption, caption)
+			if err == nil {
+				if recipientJID.ToNonAD() != chatJID.ToNonAD() {
+					utils.SendReply(client, chatJID, "✅ Media sent to your private chat!")
+				}
+				return
+			}
+			lastErr = err
 		}
-	} else if quotedMsg.VideoMessage != nil {
-		finalMessage.VideoMessage = &waE2E.VideoMessage{
-			URL: proto.String(uploadedMedia.URL), DirectPath: proto.String(uploadedMedia.DirectPath), MediaKey: uploadedMedia.MediaKey,
-			Mimetype: proto.String("video/mp4"), FileEncSHA256: uploadedMedia.FileEncSHA256, FileSHA256: uploadedMedia.FileSHA256,
-			FileLength: proto.Uint64(uploadedMedia.FileLength), Caption: proto.String(finalCaption),
-		}
-	} else if quotedMsg.AudioMessage != nil {
-		finalMessage.AudioMessage = &waE2E.AudioMessage{
-			URL: proto.String(uploadedMedia.URL), DirectPath: proto.String(uploadedMedia.DirectPath), MediaKey: uploadedMedia.MediaKey,
-			Mimetype: proto.String("audio/ogg; codecs=opus"), FileEncSHA256: uploadedMedia.FileEncSHA256, FileSHA256: uploadedMedia.FileSHA256,
-			FileLength: proto.Uint64(uploadedMedia.FileLength), PTT: proto.Bool(true),
-		}
-	} else if quotedMsg.StickerMessage != nil {
-		finalMessage.StickerMessage = &waE2E.StickerMessage{
-			URL: proto.String(uploadedMedia.URL), DirectPath: proto.String(uploadedMedia.DirectPath), MediaKey: uploadedMedia.MediaKey,
-			Mimetype: proto.String("image/webp"), FileEncSHA256: uploadedMedia.FileEncSHA256, FileSHA256: uploadedMedia.FileSHA256,
-			FileLength: proto.Uint64(uploadedMedia.FileLength),
-		}
-	} else if quotedMsg.DocumentMessage != nil {
-		finalMessage.DocumentMessage = &waE2E.DocumentMessage{
-			URL: proto.String(uploadedMedia.URL), DirectPath: proto.String(uploadedMedia.DirectPath), MediaKey: uploadedMedia.MediaKey,
-			Mimetype: quotedMsg.DocumentMessage.Mimetype, FileName: quotedMsg.DocumentMessage.FileName, FileEncSHA256: uploadedMedia.FileEncSHA256,
-			FileSHA256: uploadedMedia.FileSHA256, FileLength: proto.Uint64(uploadedMedia.FileLength), Caption: proto.String(finalCaption),
-		}
-	}
 
-	var recipientJID waTypes.JID
-	if msg.Info.IsFromMe {
-		recipientJID = *client.Store.ID
-	} else {
-		recipientJID = msg.Info.Sender
-	}
-
-	bareRecipientJID := recipientJID.ToNonAD()
-
-	_, err = client.SendMessage(context.Background(), bareRecipientJID, &finalMessage)
-	if err != nil {
-		fmt.Printf("Failed to send media privately: %v\n", err)
-		utils.SendReply(client, msg.Info.Chat, "I couldn't send the media to your private chat.")
-		return
-	}
-
-	if recipientJID != msg.Info.Chat {
-		utils.SendReply(client, msg.Info.Chat, "✅ Media sent to your private chat!")
-	}
+		fmt.Printf("[GET] Failed to recover media (id=%s): %v\n", quotedID, lastErr)
+		utils.SendReply(client, chatJID, "❌ Sorry, I couldn't download or recover that media (it may have expired on WhatsApp servers).")
+	}()
 }

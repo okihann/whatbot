@@ -67,6 +67,12 @@ func AcquireLock(userID, sessionType string) bool {
 
 // ReleaseLock frees the user so they can run the command again.
 func ReleaseLock(userID, sessionType string) {
+	interactiveMutex.Lock()
+	defer interactiveMutex.Unlock()
+	releaseLockLocked(userID, sessionType)
+}
+
+func releaseLockLocked(userID, sessionType string) {
 	key := userID + "_" + sessionType
 	delete(userSessionLocks, key)
 }
@@ -113,7 +119,7 @@ func ClearInteractiveSession(messageID string) {
 		if sess.Timer != nil {
 			sess.Timer.Stop()
 		}
-		ReleaseLock(sess.UserID, sess.Type)
+		releaseLockLocked(sess.UserID, sess.Type)
 		delete(activeInteractiveSessions, messageID)
 	}
 }

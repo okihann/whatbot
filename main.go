@@ -44,17 +44,15 @@ func setupClient(deviceStore *store.Device) {
 	clientLog := waLog.Stdout("Client", "INFO", true)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
 
-	if store.DeviceProps != nil {
-		store.DeviceProps.Os = proto.String("iPadOS")
-		store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_IPAD.Enum()
-	}
-
 	client.AddEventHandler(func(evt interface{}) {
 		switch v := evt.(type) {
 		case *events.Connected:
 			fmt.Printf("\n✅ Bot %s is live and connected!\n", client.Store.ID)
 		case *events.Message:
-			if v.Info.Timestamp.Before(botStartTime) {
+			// Allow a 15s clock-skew grace window; older offline messages are
+			// cached for anti-delete / /get without triggering commands.
+			if v.Info.Timestamp.Before(botStartTime.Add(-15 * time.Second)) {
+				owner.CacheOnlyMessage(client, v)
 				return
 			}
 			owner.HandleAutomations(client, v)
@@ -108,6 +106,11 @@ func stopNgrok() {
 }
 
 func main() {
+	if store.DeviceProps != nil {
+		store.DeviceProps.Os = proto.String("iPadOS")
+		store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_IPAD.Enum()
+	}
+
 	ai.LoadEnv()
 	ngrokConfig = ngrok.LoadConfig(ai.AppConfig.ServerPort)
 	go ai.StartServer()

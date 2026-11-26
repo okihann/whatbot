@@ -23,11 +23,13 @@ func init() {
 
 func executeShazam(client *whatsmeow.Client, msg *events.Message, args []string) {
 	var mediaMsg whatsmeow.DownloadableMessage
-	if msg.Message.GetAudioMessage() != nil {
-		mediaMsg = msg.Message.GetAudioMessage()
-	} else if msg.Message.GetVideoMessage() != nil {
-		mediaMsg = msg.Message.GetVideoMessage()
-	} else if quoted := msg.Message.GetExtendedTextMessage().GetContextInfo().GetQuotedMessage(); quoted != nil {
+	core := utils.UnwrapMessage(msg.Message)
+	if core.GetAudioMessage() != nil {
+		mediaMsg = core.GetAudioMessage()
+	} else if core.GetVideoMessage() != nil {
+		mediaMsg = core.GetVideoMessage()
+	} else if ctxInfo := utils.ExtractContextInfo(msg.Message); ctxInfo != nil && ctxInfo.QuotedMessage != nil {
+		quoted := utils.UnwrapMessage(ctxInfo.QuotedMessage)
 		if quoted.GetAudioMessage() != nil {
 			mediaMsg = quoted.GetAudioMessage()
 		} else if quoted.GetVideoMessage() != nil {

@@ -1,7 +1,10 @@
 package tool
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,11 +19,33 @@ const (
 	memegenWait   = 25 * time.Second
 )
 
+// normalizeToPNG converts any supported image (JPEG, PNG, GIF, WebP stickers)
+// into a clean PNG so memegen always accepts the uploaded background.
+func normalizeToPNG(raw []byte) ([]byte, error) {
+	decoded, format, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("decode image: %w", err)
+	}
+	if format == "png" {
+		return raw, nil
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, decoded); err != nil {
+		return nil, fmt.Errorf("encode png: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 // renderMemegen builds a custom meme on memegen using the supplied image as
 // the background. The image is parked on litterbox (1h) because memegen needs
 // a URL it can fetch.
 func renderMemegen(background []byte, top, bottom string) ([]byte, error) {
-	imgURL, err := utils.UploadToLitterbox(background, "meme.png")
+	pngBg, err := normalizeToPNG(background)
+	if err != nil {
+		return nil, err
+	}
+
+	imgURL, err := utils.UploadToLitterbox(pngBg, "meme.png")
 	if err != nil {
 		return nil, fmt.Errorf("upload: %w", err)
 	}
@@ -53,14 +78,29 @@ func renderMemegen(background []byte, top, bottom string) ([]byte, error) {
 	return data, nil
 }
 
-// memeSegment turns one caption into a memegen path segment, or "_" if blank.
+// memeSegment escapes a caption according to memegen.link's URL path rules
+// (https://api.memegen.link/docs) or returns "_" if blank.
 func memeSegment(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return "_"
 	}
-	// memegen uses underscores for spaces and a bare "/" would break the path.
-	text = strings.ReplaceAll(text, "/", "_")
-	text = strings.ReplaceAll(text, " ", "_")
-	return url.PathEscape(text)
+	// Escape in exact order so doubled chars and tilde codes don't collide.
+	r := strings.NewReplacer(
+		"_", "__",
+		"-", "--",
+		"~", "~t",
+		"?", "~q",
+		"&", "~a",
+		"%", "~p",
+		"#", "~h",
+		"/", "~s",
+		"\\", "~b",
+		"<", "~l",
+		">", "~g",
+		"\"", "''",
+		"\n", "~n",
+		" ", "_",
+	)
+	return url.PathEscape(r.Replace(text))
 }

@@ -5,7 +5,6 @@ import (
 	"bot/handlers"
 	"bot/types"
 	"bot/utils"
-	"context"
 	"fmt"
 
 	"go.mau.fi/whatsmeow"
@@ -23,9 +22,7 @@ func init() {
 }
 
 func executeRemoveOwner(client *whatsmeow.Client, msg *events.Message, args []string) {
-	// 1. Verify this command is sent from the bot's own account for security.
 	if !msg.Info.IsFromMe {
-		// Silently ignore if not from the bot's number
 		return
 	}
 
@@ -35,46 +32,32 @@ func executeRemoveOwner(client *whatsmeow.Client, msg *events.Message, args []st
 		return
 	}
 
-	// 2. Check if the command is a reply to a message.
-	ctxInfo := msg.Message.GetExtendedTextMessage().GetContextInfo()
-	if ctxInfo == nil || ctxInfo.Participant == nil {
+	ctxInfo := utils.ExtractContextInfo(msg.Message)
+	if ctxInfo == nil || ctxInfo.GetParticipant() == "" {
 		utils.SendReply(client, msg.Info.Chat, "Please reply to a user's message to remove them as an owner.")
 		return
 	}
 
-	// 3. Resolve the replied-to user's JID, handling LIDs correctly.
-	var ownerToRemoveJID waTypes.JID
-	participantJIDString := *ctxInfo.Participant
-
-	parsedJID, err := waTypes.ParseJID(participantJIDString)
+	parsedJID, err := waTypes.ParseJID(ctxInfo.GetParticipant())
 	if err != nil {
 		utils.SendReply(client, msg.Info.Chat, "The replied-to user has an invalid ID.")
 		return
 	}
 
-	if parsedJID.Server == "lid" {
-		resolvedJID, err := client.Store.LIDs.GetPNForLID(context.Background(), parsedJID)
-		if err != nil {
-			utils.SendReply(client, msg.Info.Chat, "Could not resolve the user's ID to remove them.")
-			return
-		}
-		ownerToRemoveJID = resolvedJID
-	} else {
-		ownerToRemoveJID = parsedJID
+	ownerToRemove := utils.ResolvePhoneNumber(client, parsedJID, waTypes.EmptyJID)
+	if ownerToRemove == "" {
+		utils.SendReply(client, msg.Info.Chat, "Could not resolve the user's phone number.")
+		return
 	}
 
-	ownerToRemoveJIDString := cutJID(ownerToRemoveJID.String())
-
-	// 4. Find the owner in the list and remove them.
 	var newOwnerList []string
 	found := false
-	for _, ownerJID := range conf.Settings.OwnerJIDs {
-		if ownerJID == ownerToRemoveJIDString {
+	for _, ownerNum := range conf.Settings.OwnerJIDs {
+		if utils.NormalizeTarget(ownerNum) == ownerToRemove {
 			found = true
-			// Skip adding this JID to the new list, effectively removing them.
-		} else {
-			newOwnerList = append(newOwnerList, ownerJID)
+			continue
 		}
+		newOwnerList = append(newOwnerList, ownerNum)
 	}
 
 	if !found {
@@ -82,7 +65,6 @@ func executeRemoveOwner(client *whatsmeow.Client, msg *events.Message, args []st
 		return
 	}
 
-	// 5. Update the config with the new, smaller list.
 	conf.Settings.OwnerJIDs = newOwnerList
 	if err := config.SaveConfig(conf); err != nil {
 		fmt.Println("Failed to save config:", err)
@@ -90,6 +72,5 @@ func executeRemoveOwner(client *whatsmeow.Client, msg *events.Message, args []st
 		return
 	}
 
-	// 6. Send a confirmation message.
-	utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("✅ Success! %s has been removed as an owner.", ownerToRemoveJIDString))
+	utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("✅ Success! %s has been removed as an owner.", ownerToRemove))
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types/events"
@@ -29,7 +30,7 @@ func executeManga(client *whatsmeow.Client, msg *events.Message, args []string) 
 
 	utils.SendReply(client, msg.Info.Chat, "📚 Searching MyAnimeList...")
 
-	resp, err := http.Get(apiURL)
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Get(apiURL)
 	if err != nil {
 		utils.SendReply(client, msg.Info.Chat, "❌ Failed to reach MyAnimeList API.")
 		return

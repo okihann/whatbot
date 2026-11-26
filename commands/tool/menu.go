@@ -105,7 +105,7 @@ func handleMenuInteraction(client *whatsmeow.Client, msg *events.Message) bool {
 		}
 	}
 
-	ctxInfo := msg.Message.GetExtendedTextMessage().GetContextInfo()
+	ctxInfo := utils.ExtractContextInfo(msg.Message)
 	if ctxInfo == nil || ctxInfo.StanzaID == nil {
 		return false
 	}

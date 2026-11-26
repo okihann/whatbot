@@ -31,21 +31,7 @@ func executeDisableAllGroup(client *whatsmeow.Client, msg *events.Message, args 
 		return
 	}
 
-	isOwner := msg.Info.IsFromMe
-
-	if !isOwner {
-		// Note: We are using Sender.String() here, not SenderAlt, for broad compatibility.
-		// cutJID is not needed for these commands.
-		senderJID := cutJID(msg.Info.SenderAlt.String())
-		for _, ownerJID := range conf.Settings.OwnerJIDs {
-			if senderJID == ownerJID {
-				isOwner = true
-				break
-			}
-		}
-	}
-
-	if !isOwner {
+	if !utils.IsOwner(client, msg, conf) {
 		return
 	}
 

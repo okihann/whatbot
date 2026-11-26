@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types/events"
@@ -30,14 +31,14 @@ func executeTraceAnime(client *whatsmeow.Client, msg *events.Message, args []str
 		return
 	}
 
-	// If the user uploaded the photo as a Document, ensure it is actually an image format (JPG/PNG)
-	if docMsg := msg.Message.GetDocumentMessage(); docMsg != nil {
+	core := utils.UnwrapMessage(msg.Message)
+	if docMsg := core.GetDocumentMessage(); docMsg != nil {
 		if !strings.HasPrefix(docMsg.GetMimetype(), "image/") {
 			utils.SendReply(client, msg.Info.Chat, "⚠️ The document must be an image file (JPG/PNG).")
 			return
 		}
-	} else if quoted := msg.Message.GetExtendedTextMessage().GetContextInfo().GetQuotedMessage(); quoted != nil {
-		if docMsg := quoted.GetDocumentMessage(); docMsg != nil {
+	} else if ctxInfo := utils.ExtractContextInfo(msg.Message); ctxInfo != nil && ctxInfo.QuotedMessage != nil {
+		if docMsg := utils.UnwrapMessage(ctxInfo.QuotedMessage).GetDocumentMessage(); docMsg != nil {
 			if !strings.HasPrefix(docMsg.GetMimetype(), "image/") {
 				utils.SendReply(client, msg.Info.Chat, "⚠️ The quoted document must be an image file (JPG/PNG).")
 				return
@@ -53,11 +54,14 @@ func executeTraceAnime(client *whatsmeow.Client, msg *events.Message, args []str
 		return
 	}
 
-	// Added cutBorders=1 to ignore WhatsApp compression artifacts
-	req, _ := http.NewRequest("POST", "https://api.trace.moe/search?cutBorders=1", bytes.NewBuffer(imageData))
+	req, err := http.NewRequest("POST", "https://api.trace.moe/search?cutBorders=1", bytes.NewBuffer(imageData))
+	if err != nil {
+		utils.SendReply(client, msg.Info.Chat, "❌ Failed to prepare trace request.")
+		return
+	}
 	req.Header.Set("Content-Type", "image/jpeg")
 
-	clientHTTP := &http.Client{}
+	clientHTTP := &http.Client{Timeout: 25 * time.Second}
 	resp, err := clientHTTP.Do(req)
 	if err != nil {
 		utils.SendReply(client, msg.Info.Chat, "❌ Trace API failed.")

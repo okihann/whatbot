@@ -5,23 +5,24 @@ import (
 	"bot/types"
 	"bot/utils"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/proto/waE2E"
 	waTypes "go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	"google.golang.org/protobuf/proto"
 )
 
 func init() {
 	handlers.RegisterCommand(types.Command{
 		Name:        "tiktok",
-		Description: "Downloads a video from a TikTok link.",
+		Description: "Downloads a video or photo slideshow from a TikTok link.",
 		Category:    "downloader",
 		Execute:     executeTiktok,
 	})
@@ -33,101 +34,205 @@ func init() {
 	})
 }
 
-func executeTiktok(client *whatsmeow.Client, msg *events.Message, args []string) {
-	// The full message content is passed as the first argument
-	fullArgString := ""
-	if len(args) > 0 {
-		fullArgString = args[0]
-	}
+type tikwmResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		Title    string   `json:"title"`
+		Duration int      `json:"duration"`
+		Play     string   `json:"play"`
+		HDPlay   string   `json:"hdplay"`
+		Music    string   `json:"music"`
+		Images   []string `json:"images"`
+	} `json:"data"`
+}
 
-	if fullArgString == "" || !strings.Contains(fullArgString, "tiktok.com") {
+func isTikTokURL(rawURL string) bool {
+	lower := strings.ToLower(rawURL)
+	return strings.Contains(lower, "tiktok.com")
+}
+
+func fetchTikWM(ctx context.Context, tiktokURL string) (*tikwmResponse, error) {
+	endpoint := "https://www.tikwm.com/api/?hd=1&url=" + url.QueryEscape(tiktokURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", utils.BrowserUserAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := (&http.Client{Timeout: 25 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result tikwmResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if result.Code != 0 {
+		return nil, fmt.Errorf("tikwm error: %s", result.Msg)
+	}
+	return &result, nil
+}
+
+func executeTiktok(client *whatsmeow.Client, msg *events.Message, args []string) {
+	rawInput := strings.TrimSpace(strings.Join(args, " "))
+	targetURL := utils.ExtractURL(rawInput)
+	if targetURL == "" || !isTikTokURL(targetURL) {
 		utils.SendReply(client, msg.Info.Chat, "❌ Please provide a valid TikTok link.")
 		return
 	}
 
-	// Launch the entire process in a goroutine to keep the bot responsive
-	go func(url string, chatJID waTypes.JID) {
-		utils.SendReply(client, chatJID, "🔍 Fetching TikTok details, please wait...")
+	go downloadTikTokURL(client, msg.Info.Chat, targetURL)
+}
 
-		// Use the generic GetVideoInfo function, it works for TikTok too
-		videoInfo, err := utils.GetVideoInfo(url, "best")
-		if err != nil {
-			fmt.Println("Error getting TikTok info:", err)
-			utils.SendReply(client, chatJID, "⚠️ Failed to fetch TikTok details. The video may be private or the link is invalid.")
-			return
-		}
+func downloadTikTokURL(client *whatsmeow.Client, chatJID waTypes.JID, targetURL string) {
+	utils.SendReply(client, chatJID, "🔍 Fetching TikTok media, please wait...")
 
-		title := videoInfo.Title
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	// Try TikWM first: it is fast, watermark-free, and handles both videos AND
+	// photo slideshows (which yt-dlp does not support).
+	if tw, err := fetchTikWM(ctx, targetURL); err == nil && tw != nil {
+		title := strings.TrimSpace(tw.Data.Title)
 		if title == "" {
-			title = "TikTok Video"
+			title = "TikTok"
 		}
 
-		var fileSize int64
-		if videoInfo.Filesize > 0 {
-			fileSize = videoInfo.Filesize
-		} else {
-			fileSize = videoInfo.FilesizeApprox
+		// Case 1: TikTok Photo Slideshow.
+		if len(tw.Data.Images) > 0 {
+			if err := sendTikTokSlideshow(ctx, client, chatJID, title, tw.Data.Images, tw.Data.Music); err == nil {
+				return
+			} else {
+				fmt.Printf("[TIKTOK] Slideshow send failed: %v\n", err)
+			}
 		}
-		sizeMB := float64(fileSize) / (1024 * 1024)
 
-		infoMessage := fmt.Sprintf(
-			`🎬 *[ TIKTOK VIDEO ]*
-
-• *Title:* %s
-• *Size:* %.2f MB
-
-⌛ Please wait while your video is being downloaded...`, title, sizeMB)
-
-		utils.SendReply(client, chatJID, infoMessage)
-
-		tempDir := "temp"
-		if _, err := os.Stat(tempDir); os.IsNotExist(err) {
-			os.Mkdir(tempDir, 0755)
+		// Case 2: TikTok Video (prefer HD, fallback to standard play).
+		videoURL := tw.Data.HDPlay
+		if videoURL == "" {
+			videoURL = tw.Data.Play
 		}
-		outputFile := filepath.Join(tempDir, fmt.Sprintf("tiktok_%d.mp4", time.Now().Unix()))
-		defer os.Remove(outputFile)
+		if videoURL != "" {
+			if err := downloadAndSendTikTokDirect(ctx, client, chatJID, videoURL, title, uint32(tw.Data.Duration)); err == nil {
+				return
+			} else {
+				fmt.Printf("[TIKTOK] TikWM video download failed (%v), falling back to yt-dlp...\n", err)
+			}
+		}
+	} else if err != nil {
+		fmt.Printf("[TIKTOK] TikWM API unavailable (%v), falling back to yt-dlp...\n", err)
+	}
 
-		// Use the generic DownloadVideo function
-		err = utils.DownloadVideo(url, outputFile, "best")
+	// Fallback: yt-dlp video download + H.264 compatibility check.
+	downloadTikTokViaYtDlp(ctx, client, chatJID, targetURL)
+}
+
+func sendTikTokSlideshow(ctx context.Context, client *whatsmeow.Client, chatJID waTypes.JID, title string, images []string, musicURL string) error {
+	sent := 0
+	for i, imgURL := range images {
+		data, ct, err := utils.DownloadHTTPBytes(ctx, imgURL, nil)
 		if err != nil {
-			fmt.Println("Error downloading TikTok video:", err)
-			utils.SendReply(client, chatJID, "⚠️ Video download failed.")
-			return
+			continue
 		}
-
-		if _, err := os.Stat(outputFile); os.IsNotExist(err) {
-			utils.SendReply(client, chatJID, "⚠️ Video download failed or the file is empty.")
-			return
+		caption := ""
+		if i == 0 {
+			caption = fmt.Sprintf("🖼️ *[ TIKTOK SLIDESHOW ]* (%d photos)\n\n%s", len(images), title)
 		}
-
-		videoData, err := os.ReadFile(outputFile)
-		if err != nil {
-			utils.SendReply(client, chatJID, "⚠️ Failed to read downloaded video file.")
-			return
+		if _, err := utils.SendImageData(ctx, client, chatJID, data, ct, caption); err == nil {
+			sent++
 		}
+	}
+	if sent == 0 {
+		return fmt.Errorf("failed to download slideshow images")
+	}
 
-		uploaded, err := client.Upload(context.Background(), videoData, whatsmeow.MediaVideo)
-		if err != nil {
-			utils.SendReply(client, chatJID, "⚠️ Failed to upload video to WhatsApp.")
-			return
+	// Send background audio if available.
+	if musicURL != "" {
+		if audioBytes, _, err := utils.DownloadHTTPBytes(ctx, musicURL, nil); err == nil && len(audioBytes) > 0 {
+			_, _ = utils.SendAudioData(ctx, client, chatJID, audioBytes, "audio/mpeg", 0, false)
 		}
+	}
+	return nil
+}
 
-		videoMsg := &waE2E.VideoMessage{
-			URL:           proto.String(uploaded.URL),
-			DirectPath:    proto.String(uploaded.DirectPath),
-			MediaKey:      uploaded.MediaKey,
-			Mimetype:      proto.String("video/mp4"),
-			FileSHA256:    uploaded.FileSHA256,
-			FileEncSHA256: uploaded.FileEncSHA256,
-			FileLength:    proto.Uint64(uploaded.FileLength),
-			Caption:       proto.String(title),
-			Seconds:       proto.Uint32(uint32(videoInfo.Duration)),
-		}
+func downloadAndSendTikTokDirect(ctx context.Context, client *whatsmeow.Client, chatJID waTypes.JID, videoURL, title string, duration uint32) error {
+	rawBytes, _, err := utils.DownloadHTTPBytes(ctx, videoURL, nil)
+	if err != nil {
+		return err
+	}
 
-		_, err = client.SendMessage(context.Background(), chatJID, &waE2E.Message{VideoMessage: videoMsg})
-		if err != nil {
-			fmt.Println("Error sending TikTok video message:", err)
-		}
+	workDir, err := os.MkdirTemp("", "whatbot-tt-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(workDir)
 
-	}(fullArgString, msg.Info.Chat)
+	rawPath := filepath.Join(workDir, "raw.mp4")
+	outPath := filepath.Join(workDir, "out.mp4")
+	if err := os.WriteFile(rawPath, rawBytes, 0644); err != nil {
+		return err
+	}
+	if err := utils.EnsureWhatsAppVideo(rawPath, outPath); err != nil {
+		outPath = rawPath
+	}
+
+	finalBytes, err := os.ReadFile(outPath)
+	if err != nil {
+		return err
+	}
+
+	thumb, seconds := utils.ExtractVideoMeta(outPath)
+	if seconds == 0 {
+		seconds = duration
+	}
+	_, err = utils.SendVideoData(ctx, client, chatJID, finalBytes, title, seconds, thumb)
+	return err
+}
+
+func downloadTikTokViaYtDlp(ctx context.Context, client *whatsmeow.Client, chatJID waTypes.JID, targetURL string) {
+	videoInfo, err := utils.GetVideoInfo(targetURL, "best")
+	if err != nil {
+		fmt.Printf("[TIKTOK] yt-dlp info error: %v\n", err)
+		utils.SendReply(client, chatJID, "⚠️ Failed to fetch TikTok details. The video may be private or the link is invalid.")
+		return
+	}
+
+	title := videoInfo.Title
+	if title == "" {
+		title = "TikTok Video"
+	}
+
+	workDir, err := os.MkdirTemp("", "whatbot-tt-yt-*")
+	if err != nil {
+		utils.SendReply(client, chatJID, "⚠️ Could not prepare temporary directory.")
+		return
+	}
+	defer os.RemoveAll(workDir)
+
+	outputFile := filepath.Join(workDir, fmt.Sprintf("tiktok_%d.mp4", time.Now().UnixNano()))
+	if err := utils.DownloadVideo(targetURL, outputFile, "best"); err != nil {
+		fmt.Printf("[TIKTOK] yt-dlp download error: %v\n", err)
+		utils.SendReply(client, chatJID, "⚠️ TikTok video download failed.")
+		return
+	}
+
+	videoData, err := os.ReadFile(outputFile)
+	if err != nil {
+		utils.SendReply(client, chatJID, "⚠️ Failed to read downloaded video file.")
+		return
+	}
+
+	thumb, seconds := utils.ExtractVideoMeta(outputFile)
+	if seconds == 0 && videoInfo.Duration > 0 {
+		seconds = uint32(videoInfo.Duration)
+	}
+
+	if _, err := utils.SendVideoData(ctx, client, chatJID, videoData, title, seconds, thumb); err != nil {
+		fmt.Printf("[TIKTOK] Send video error: %v\n", err)
+		utils.SendReply(client, chatJID, "⚠️ Failed to upload TikTok video to WhatsApp.")
+	}
 }

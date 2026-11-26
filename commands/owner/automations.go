@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"go.mau.fi/whatsmeow"
@@ -19,65 +18,46 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-var (
-	msgCache         = make(map[string]*events.Message)
-	autoGetDoneCache = make(map[string]bool)
-	cacheMu          sync.Mutex
-)
-
 func init() {
-	handlers.RegisterCommand(types.Command{Name: "anti-delete", Category: "owner", Execute: executeAntiDelete})
-	handlers.RegisterCommand(types.Command{Name: "auto-get", Category: "owner", Execute: executeAutoGet})
+	handlers.RegisterCommand(types.Command{
+		Name:        "anti-delete",
+		Description: "Recovers deleted messages and forwards them to your private chat. (Owner only)",
+		Category:    "owner",
+		Execute:     executeAntiDelete,
+	})
+	handlers.RegisterCommand(types.Command{
+		Name:        "auto-get",
+		Description: "Automatically saves view-once and DM media from targets to your private chat. (Owner only)",
+		Category:    "owner",
+		Execute:     executeAutoGet,
+	})
 }
 
 func isTargeted(targets []string, num string) bool {
+	cleanNum := utils.NormalizeTarget(num)
 	for _, t := range targets {
-		if t == "all" {
+		cleanTarget := utils.NormalizeTarget(t)
+		if cleanTarget == "" {
+			continue
+		}
+		if cleanTarget == "all" {
 			return true
 		}
-
-		// Clean the target just in case you typed "+62" instead of "62"
-		cleanTarget := strings.TrimPrefix(t, "+")
-
-		// Exact match OR prefix match (wildcard)
-		if num == cleanTarget || strings.HasPrefix(num, cleanTarget) {
+		if cleanNum != "" && (cleanNum == cleanTarget || strings.HasPrefix(cleanNum, cleanTarget)) {
 			return true
 		}
 	}
 	return false
 }
 
-func resolvePN(client *whatsmeow.Client, jid waTypes.JID) string {
-	nonAD := jid.ToNonAD()
-	if nonAD.Server == "lid" {
-		pn, err := client.Store.LIDs.GetPNForLID(context.Background(), nonAD)
-		if err == nil && pn.User != "" {
-			return pn.User
+func hasExactTarget(targets []string, target string) bool {
+	want := utils.NormalizeTarget(target)
+	for _, t := range targets {
+		if utils.NormalizeTarget(t) == want {
+			return true
 		}
 	}
-	return nonAD.User
-}
-
-func extractContextInfo(msg *waE2E.Message) *waE2E.ContextInfo {
-	if msg == nil {
-		return nil
-	}
-	if ext := msg.GetExtendedTextMessage(); ext != nil {
-		return ext.GetContextInfo()
-	}
-	if img := msg.GetImageMessage(); img != nil {
-		return img.GetContextInfo()
-	}
-	if vid := msg.GetVideoMessage(); vid != nil {
-		return vid.GetContextInfo()
-	}
-	if aud := msg.GetAudioMessage(); aud != nil {
-		return aud.GetContextInfo()
-	}
-	if doc := msg.GetDocumentMessage(); doc != nil {
-		return doc.GetContextInfo()
-	}
-	return nil
+	return false
 }
 
 func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []string, feature string) {
@@ -85,19 +65,7 @@ func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []stri
 	if err != nil {
 		return
 	}
-
-	isOwner := msg.Info.IsFromMe
-	if !isOwner {
-		senderNum := resolvePN(client, msg.Info.Sender)
-		for _, ownerNum := range conf.Settings.OwnerJIDs {
-			if senderNum == ownerNum {
-				isOwner = true
-				break
-			}
-		}
-	}
-
-	if !isOwner {
+	if !utils.IsOwner(client, msg, conf) {
 		utils.SendReply(client, msg.Info.Chat, "🚫 Access Denied: This command is restricted to the bot owner.")
 		return
 	}
@@ -110,77 +78,110 @@ func manageAutomation(client *whatsmeow.Client, msg *events.Message, args []stri
 	parts := strings.Fields(args[0])
 	action := strings.ToLower(parts[0])
 	target := ""
-
 	if len(parts) > 1 {
-		target = strings.TrimSpace(parts[1])
+		target = utils.NormalizeTarget(strings.Join(parts[1:], ""))
 	}
 
-	if client.Store.ID == nil {
+	if client.Store == nil || client.Store.ID == nil {
 		return
 	}
 	botID := client.Store.ID.ToNonAD().User
 	autoConf := db.GetAutoConfig(botID)
 
+	isAntiDelete := feature == "anti-delete"
+	getTargets := func() []string {
+		if isAntiDelete {
+			return autoConf.AntiDeleteTargets
+		}
+		return autoConf.AutoGetTargets
+	}
+	setTargets := func(list []string) {
+		if isAntiDelete {
+			autoConf.AntiDeleteTargets = list
+		} else {
+			autoConf.AutoGetTargets = list
+		}
+	}
+
 	switch action {
 	case "list":
-		if feature == "anti-delete" {
-			utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("📋 *Anti-Delete Status*\n*Global Switch:* %v\n*Targets:* %v", autoConf.AntiDeleteOn, autoConf.AntiDeleteTargets))
-		} else {
-			utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("📋 *Auto-Get Status*\n*Global Switch:* %v\n*Targets:* %v", autoConf.AutoGetOn, autoConf.AutoGetTargets))
+		enabled := autoConf.AutoGetOn
+		title := "Auto-Get"
+		if isAntiDelete {
+			enabled = autoConf.AntiDeleteOn
+			title = "Anti-Delete"
 		}
+		targets := getTargets()
+		targetDisplay := "(none — run `/" + feature + " add all` or `/" + feature + " add 628...`)"
+		if len(targets) > 0 {
+			targetDisplay = strings.Join(targets, ", ")
+		}
+		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("📋 *%s Status*\n*Global Switch:* %v\n*Targets:* %s", title, enabled, targetDisplay))
+		return
+
 	case "on":
-		if feature == "anti-delete" {
+		if isAntiDelete {
 			autoConf.AntiDeleteOn = true
 		} else {
 			autoConf.AutoGetOn = true
 		}
-		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("✅ *%s* is now ON.", feature))
+		reply := fmt.Sprintf("✅ *%s* is now ON.", feature)
+		if len(getTargets()) == 0 {
+			reply += fmt.Sprintf("\n\n⚠️ No targets configured yet! Add one with:\n`/%s add all` or `/%s add 628...`", feature, feature)
+		}
+		utils.SendReply(client, msg.Info.Chat, reply)
+
 	case "off":
-		if feature == "anti-delete" {
+		if isAntiDelete {
 			autoConf.AntiDeleteOn = false
 		} else {
 			autoConf.AutoGetOn = false
 		}
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("❌ *%s* is now OFF.", feature))
+
 	case "add":
 		if target == "" {
 			utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Please provide a number to add. (e.g. `/%s add all` or `/%s add 628...`)", feature, feature))
 			return
 		}
-		if feature == "anti-delete" {
-			if !isTargeted(autoConf.AntiDeleteTargets, target) {
-				autoConf.AntiDeleteTargets = append(autoConf.AntiDeleteTargets, target)
-			}
-		} else {
-			if !isTargeted(autoConf.AutoGetTargets, target) {
-				autoConf.AutoGetTargets = append(autoConf.AutoGetTargets, target)
-			}
+		targets := getTargets()
+		if !hasExactTarget(targets, target) {
+			setTargets(append(targets, target))
 		}
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("✅ Added `%s` to *%s* targets.", target, feature))
+
 	case "remove":
+		if target == "" {
+			utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Please provide a target to remove. (e.g. `/%s remove all` or `/%s remove 628...`)", feature, feature))
+			return
+		}
 		var newList []string
-		list := autoConf.AntiDeleteTargets
-		if feature == "auto-get" {
-			list = autoConf.AutoGetTargets
-		}
-
-		for _, v := range list {
-			if v != target {
-				newList = append(newList, v)
+		removed := false
+		for _, v := range getTargets() {
+			if utils.NormalizeTarget(v) == target {
+				removed = true
+				continue
 			}
+			newList = append(newList, v)
+		}
+		if newList == nil {
+			newList = []string{}
+		}
+		setTargets(newList)
+		if removed {
+			utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("🗑️ Removed `%s` from *%s* targets.", target, feature))
+		} else {
+			utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("⚠️ `%s` was not found in *%s* targets.", target, feature))
 		}
 
-		if feature == "anti-delete" {
-			autoConf.AntiDeleteTargets = newList
-		} else {
-			autoConf.AutoGetTargets = newList
-		}
-		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("🗑️ Removed `%s` from *%s* targets.", target, feature))
 	default:
-		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Unknown action: `%s`\nUsage: `/%s [on|off|add|remove|list] [number]`", action, feature))
+		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("Unknown action: `%s`\nUsage: `/%s [on|off|add|remove|list] [number/all]`", action, feature))
+		return
 	}
 
-	db.SaveAutoConfig()
+	if err := db.SaveAutoConfig(); err != nil {
+		fmt.Printf("[AUTOMATIONS] Failed to save automation config: %v\n", err)
+	}
 }
 
 func executeAntiDelete(client *whatsmeow.Client, msg *events.Message, args []string) {
@@ -191,300 +192,295 @@ func executeAutoGet(client *whatsmeow.Client, msg *events.Message, args []string
 	manageAutomation(client, msg, args, "auto-get")
 }
 
+// CacheOnlyMessage stores an incoming message in the shared cache without
+// triggering automations (used for recent offline messages delivered on boot).
+func CacheOnlyMessage(client *whatsmeow.Client, msg *events.Message) {
+	if msg == nil || msg.Message == nil || client == nil || client.Store == nil || client.Store.ID == nil {
+		return
+	}
+	coreMsg := utils.UnwrapMessage(msg.Message)
+	if coreMsg == nil || isRevokeMessage(msg, coreMsg) {
+		return
+	}
+	botID := client.Store.ID.ToNonAD().User
+	if msg.Info.ID != "" {
+		utils.DefaultMessageCache.Put(botID, msg.Info.ID, &utils.CachedMessage{
+			Info:       msg.Info,
+			Message:    coreMsg,
+			IsViewOnce: utils.IsViewOnceMessage(msg, nil),
+			StoredAt:   time.Now(),
+		})
+	}
+}
+
+func isRevokeMessage(evt *events.Message, coreMsg *waE2E.Message) bool {
+	if coreMsg != nil && coreMsg.GetProtocolMessage() != nil &&
+		coreMsg.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_REVOKE {
+		return true
+	}
+	return evt != nil && (evt.Info.Edit == waTypes.EditAttributeSenderRevoke || evt.Info.Edit == waTypes.EditAttributeAdminRevoke)
+}
+
+func resolveChatLabel(client *whatsmeow.Client, info waTypes.MessageInfo) string {
+	if info.Chat.Server == waTypes.BroadcastServer {
+		return "WhatsApp Status"
+	}
+	if info.IsGroup {
+		if client != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if groupInfo, err := client.GetGroupInfo(ctx, info.Chat); err == nil && groupInfo != nil && groupInfo.Name != "" {
+				return fmt.Sprintf("Group (%s)", groupInfo.Name)
+			}
+		}
+		return fmt.Sprintf("Group (%s)", info.Chat.String())
+	}
+	return "Private Chat"
+}
+
 func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
-	if msg.Message == nil {
+	if msg == nil || msg.Message == nil || client == nil || client.Store == nil || client.Store.ID == nil {
 		return
 	}
 
-	if client.Store.ID == nil {
-		return
-	}
 	ownerJID := client.Store.ID.ToNonAD()
 	botID := ownerJID.User
-
 	autoConf := db.GetAutoConfig(botID)
-
-	if msg.Message.GetProtocolMessage() != nil && msg.Message.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_REVOKE {
-		targetID := msg.Message.GetProtocolMessage().GetKey().GetID()
-
-		cacheMu.Lock()
-		cachedMsg, found := msgCache[targetID]
-		cacheMu.Unlock()
-
-		if found && autoConf.AntiDeleteOn {
-			senderNum := resolvePN(client, cachedMsg.Info.Sender)
-
-			if isTargeted(autoConf.AntiDeleteTargets, senderNum) {
-
-				// FEATURE UPDATE: Accurately label Statuses, Groups, and DMs
-				chatName := "Private Chat"
-				if cachedMsg.Info.Chat.Server == "broadcast" {
-					chatName = "WhatsApp Status"
-				} else if cachedMsg.Info.IsGroup {
-					chatName = fmt.Sprintf("Group (%s)", cachedMsg.Info.Chat.String())
-				}
-
-				alertText := fmt.Sprintf("🚨 *Anti-Delete Triggered*\n*Target:* %s\n*Chat:* %s\n\n_Recovered Message:_\n", senderNum, chatName)
-				coreMsg := utils.UnwrapMessage(cachedMsg.Message)
-
-				isText := coreMsg.Conversation != nil || coreMsg.ExtendedTextMessage != nil
-
-				if isText && coreMsg.ImageMessage == nil && coreMsg.VideoMessage == nil && coreMsg.DocumentMessage == nil && coreMsg.AudioMessage == nil && coreMsg.StickerMessage == nil {
-					originalText := utils.GetTextFromMessage(cachedMsg.Message)
-					finalText := alertText + originalText
-					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{
-						ExtendedTextMessage: &waE2E.ExtendedTextMessage{
-							Text: proto.String(finalText),
-						},
-					})
-				} else if coreMsg.ImageMessage != nil {
-					img := proto.Clone(coreMsg.ImageMessage).(*waE2E.ImageMessage)
-					origCap := ""
-					if img.Caption != nil {
-						origCap = *img.Caption
-					}
-					img.Caption = proto.String(alertText + origCap)
-					// img.ViewOnce = proto.Bool(false)
-					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{ImageMessage: img})
-				} else if coreMsg.VideoMessage != nil {
-					vid := proto.Clone(coreMsg.VideoMessage).(*waE2E.VideoMessage)
-					origCap := ""
-					if vid.Caption != nil {
-						origCap = *vid.Caption
-					}
-					vid.Caption = proto.String(alertText + origCap)
-					// vid.ViewOnce = proto.Bool(false)
-					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{VideoMessage: vid})
-				} else if coreMsg.DocumentMessage != nil {
-					doc := proto.Clone(coreMsg.DocumentMessage).(*waE2E.DocumentMessage)
-					origCap := ""
-					if doc.Caption != nil {
-						origCap = *doc.Caption
-					}
-					doc.Caption = proto.String(alertText + origCap)
-					client.SendMessage(context.Background(), ownerJID, &waE2E.Message{DocumentMessage: doc})
-				} else {
-					utils.SendReply(client, ownerJID, alertText)
-					client.SendMessage(context.Background(), ownerJID, coreMsg)
-				}
-			}
-		}
+	coreMsg := utils.UnwrapMessage(msg.Message)
+	if coreMsg == nil {
 		return
 	}
 
-	// Cache direct incoming messages (and statuses) for 24 hours
+	// 1. Handle message revocations (Anti-Delete).
+	if isRevokeMessage(msg, coreMsg) {
+		handleRevoke(client, msg, coreMsg, ownerJID, botID, autoConf)
+		return
+	}
+
+	isViewOnce := utils.IsViewOnceMessage(msg, nil)
+
+	// 2. Cache the incoming message for anti-delete, auto-get, and /get.
 	if msg.Info.ID != "" {
-		cacheMu.Lock()
-		msgCache[msg.Info.ID] = msg
-		cacheMu.Unlock()
-		go func(msgID string) {
-			time.Sleep(24 * time.Hour)
-			cacheMu.Lock()
-			delete(msgCache, msgID)
-			cacheMu.Unlock()
-		}(msg.Info.ID)
-	}
+		utils.DefaultMessageCache.Put(botID, msg.Info.ID, &utils.CachedMessage{
+			Info:       msg.Info,
+			Message:    coreMsg,
+			IsViewOnce: isViewOnce,
+			StoredAt:   time.Now(),
+		})
 
-	ctxInfo := extractContextInfo(msg.Message)
-	if ctxInfo != nil && ctxInfo.QuotedMessage != nil && ctxInfo.StanzaID != nil {
-		quotedID := *ctxInfo.StanzaID
-		quotedMedia := utils.UnwrapMessage(ctxInfo.QuotedMessage)
-
-		var quotedSenderJID waTypes.JID
-		if ctxInfo.Participant != nil && *ctxInfo.Participant != "" {
-			quotedSenderJID, _ = waTypes.ParseJID(*ctxInfo.Participant)
-		} else if !msg.Info.IsGroup {
-			if msg.Info.IsFromMe {
-				quotedSenderJID = msg.Info.Chat
-			} else {
-				quotedSenderJID = msg.Info.Sender
-			}
-		} else {
-			quotedSenderJID = msg.Info.Sender
-		}
-
-		quotedSenderNum := resolvePN(client, quotedSenderJID)
-
-		cacheMu.Lock()
-		if existing, found := msgCache[quotedID]; found {
-			existing.Message = quotedMedia
-		} else {
-			msgCache[quotedID] = &events.Message{
-				Info: waTypes.MessageInfo{
-					MessageSource: waTypes.MessageSource{
-						Sender:  quotedSenderJID,
-						Chat:    msg.Info.Chat,
-						IsGroup: msg.Info.IsGroup,
-					},
-					ID:        quotedID,
-					Timestamp: msg.Info.Timestamp,
-				},
-				Message: quotedMedia,
-			}
-		}
-		alreadyGotten := autoGetDoneCache[quotedID]
-		cacheMu.Unlock()
-
-		if autoConf.AutoGetOn && !alreadyGotten && isTargeted(autoConf.AutoGetTargets, quotedSenderNum) {
-			isMedia := quotedMedia.GetImageMessage() != nil ||
-				quotedMedia.GetVideoMessage() != nil ||
-				quotedMedia.GetAudioMessage() != nil ||
-				quotedMedia.GetDocumentMessage() != nil
-
-			if isMedia {
-				cacheMu.Lock()
-				autoGetDoneCache[quotedID] = true
-				cacheMu.Unlock()
-
-				go processAutoGet(client, quotedMedia, ownerJID, quotedSenderNum)
+		// Eagerly capture view-once media bytes on arrival so opening or
+		// deleting it seconds later never causes /get or anti-delete to fail.
+		if isViewOnce && utils.HasDownloadableMedia(coreMsg) {
+			fileLen := utils.MediaFileLength(coreMsg)
+			if fileLen == 0 || fileLen <= utils.MaxCachedViewOnceBytes {
+				go precacheViewOnceMedia(client, botID, msg.Info.ID, coreMsg)
 			}
 		}
 	}
 
-	if !msg.Info.IsGroup && msg.Info.Chat.Server != "broadcast" && !msg.Info.IsFromMe && autoConf.AutoGetOn {
-		senderNum := resolvePN(client, msg.Info.Sender)
+	// 3. Inspect quoted messages (recovers view-once messages revealed via reply
+	// without ever clobbering a complete original cached message).
+	if ctxInfo := utils.ExtractContextInfo(msg.Message); ctxInfo != nil && ctxInfo.QuotedMessage != nil && ctxInfo.GetStanzaID() != "" {
+		handleQuotedAutomation(client, msg, ctxInfo, ownerJID, botID, autoConf)
+	}
 
-		if isTargeted(autoConf.AutoGetTargets, senderNum) {
-			coreMsg := utils.UnwrapMessage(msg.Message)
-
-			isMedia := coreMsg.GetImageMessage() != nil ||
-				coreMsg.GetVideoMessage() != nil ||
-				coreMsg.GetAudioMessage() != nil ||
-				coreMsg.GetDocumentMessage() != nil
-
-			cacheMu.Lock()
-			alreadyGotten := autoGetDoneCache[msg.Info.ID]
-			cacheMu.Unlock()
-
-			if isMedia && !alreadyGotten {
-				cacheMu.Lock()
-				autoGetDoneCache[msg.Info.ID] = true
-				cacheMu.Unlock()
-
-				go processAutoGet(client, coreMsg, ownerJID, senderNum)
+	// 4. Direct Auto-Get:
+	//    - Always capture view-once media in BOTH DMs and Groups when targeted.
+	//    - Capture regular media in DMs (excluding broadcasts/status and self).
+	if autoConf.AutoGetOn && !msg.Info.IsFromMe && msg.Info.Chat.Server != waTypes.BroadcastServer {
+		shouldCapture := isViewOnce || !msg.Info.IsGroup
+		if shouldCapture && utils.IsMediaMessage(coreMsg) {
+			senderNum := utils.ResolvePhoneNumber(client, msg.Info.Sender, msg.Info.SenderAlt)
+			if isTargeted(autoConf.AutoGetTargets, senderNum) && utils.DefaultMessageCache.TryMarkAutoGet(botID, msg.Info.ID) {
+				chatLabel := resolveChatLabel(client, msg.Info)
+				go processAutoGet(client, botID, msg.Info.ID, coreMsg, ownerJID, senderNum, chatLabel, isViewOnce)
 			}
 		}
 	}
 }
 
-func processAutoGet(client *whatsmeow.Client, coreMsg *waE2E.Message, ownerJID waTypes.JID, senderNum string) {
-	var mediaType whatsmeow.MediaType
-	var data []byte
-	var err error
-	var origCaption string
+func precacheViewOnceMedia(client *whatsmeow.Client, botID, msgID string, coreMsg *waE2E.Message) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	// Extract original caption and attempt download
-	if coreMsg.ImageMessage != nil {
-		mediaType = whatsmeow.MediaImage
-		if coreMsg.ImageMessage.Caption != nil {
-			origCaption = *coreMsg.ImageMessage.Caption
+	data, _, _, err := utils.DownloadMedia(ctx, client, coreMsg)
+	if err != nil {
+		fmt.Printf("  [VIEW-ONCE CACHE] Pre-download skipped for %s: %v\n", msgID, err)
+		return
+	}
+	utils.DefaultMessageCache.SetMediaData(botID, msgID, data)
+}
+
+func handleRevoke(
+	client *whatsmeow.Client,
+	revokeEvt *events.Message,
+	coreMsg *waE2E.Message,
+	ownerJID waTypes.JID,
+	botID string,
+	autoConf *db.AutomationConfig,
+) {
+	if !autoConf.AntiDeleteOn {
+		return
+	}
+
+	targetID := coreMsg.GetProtocolMessage().GetKey().GetID()
+	if targetID == "" {
+		targetID = revokeEvt.Info.MsgMetaInfo.TargetID
+	}
+	if targetID == "" {
+		return
+	}
+
+	cached, found := utils.DefaultMessageCache.Get(botID, targetID)
+	if !found || cached == nil || cached.Message == nil {
+		return
+	}
+
+	senderNum := utils.ResolvePhoneNumber(client, cached.Info.Sender, cached.Info.SenderAlt)
+	if senderNum == "" {
+		senderNum = utils.ResolvePhoneNumber(client, revokeEvt.Info.Sender, revokeEvt.Info.SenderAlt)
+	}
+	if !isTargeted(autoConf.AntiDeleteTargets, senderNum) {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		chatName := resolveChatLabel(client, cached.Info)
+		voBadge := ""
+		if cached.IsViewOnce {
+			voBadge = " (View-Once)"
 		}
-		data, err = client.Download(context.Background(), coreMsg.ImageMessage)
-	} else if coreMsg.VideoMessage != nil {
-		mediaType = whatsmeow.MediaVideo
-		if coreMsg.VideoMessage.Caption != nil {
-			origCaption = *coreMsg.VideoMessage.Caption
+		alertHeader := fmt.Sprintf("🚨 *Anti-Delete Triggered*%s\n*Target:* %s\n*Chat:* %s", voBadge, senderNum, chatName)
+
+		recoveredMsg := utils.UnwrapMessage(cached.Message)
+		if utils.IsMediaMessage(recoveredMsg) {
+			origCap := utils.MediaCaption(recoveredMsg)
+			caption := alertHeader
+			if origCap != "" {
+				caption += "\n\n_Recovered Caption:_\n" + origCap
+			}
+			if err := utils.ForwardPermanentMedia(ctx, client, ownerJID, recoveredMsg, cached.MediaData, caption, alertHeader); err != nil {
+				fmt.Printf("  [ANTI-DELETE] Failed to forward media (id=%s): %v\n", targetID, err)
+				_, _ = utils.SendReply(client, ownerJID, alertHeader+"\n\n_(Media could not be recovered from WhatsApp servers.)_")
+			}
+			return
 		}
-		data, err = client.Download(context.Background(), coreMsg.VideoMessage)
-	} else if coreMsg.AudioMessage != nil {
-		mediaType = whatsmeow.MediaAudio
-		data, err = client.Download(context.Background(), coreMsg.AudioMessage)
-	} else if coreMsg.DocumentMessage != nil {
-		mediaType = whatsmeow.MediaDocument
-		if coreMsg.DocumentMessage.Caption != nil {
-			origCaption = *coreMsg.DocumentMessage.Caption
+
+		originalText := utils.GetTextFromMessage(recoveredMsg)
+		if originalText == "" {
+			originalText = "_[Unsupported or empty message]_"
 		}
-		data, err = client.Download(context.Background(), coreMsg.DocumentMessage)
+		finalText := alertHeader + "\n\n_Recovered Message:_\n" + originalText
+		if _, err := client.SendMessage(ctx, ownerJID, &waE2E.Message{
+			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+				Text: proto.String(finalText),
+			},
+		}); err != nil {
+			fmt.Printf("  [ANTI-DELETE] Failed to send recovered text (id=%s): %v\n", targetID, err)
+		}
+	}()
+}
+
+func handleQuotedAutomation(
+	client *whatsmeow.Client,
+	msg *events.Message,
+	ctxInfo *waE2E.ContextInfo,
+	ownerJID waTypes.JID,
+	botID string,
+	autoConf *db.AutomationConfig,
+) {
+	quotedID := ctxInfo.GetStanzaID()
+	quotedCore := utils.UnwrapMessage(ctxInfo.QuotedMessage)
+	if quotedCore == nil {
+		return
+	}
+	quotedIsViewOnce := utils.IsViewOnceMessage(nil, ctxInfo.QuotedMessage)
+
+	var quotedSenderJID, quotedSenderAlt waTypes.JID
+	if p := ctxInfo.GetParticipant(); p != "" {
+		quotedSenderJID, _ = waTypes.ParseJID(p)
+	} else if !msg.Info.IsGroup {
+		if msg.Info.IsFromMe {
+			quotedSenderJID = msg.Info.Chat
+			quotedSenderAlt = msg.Info.RecipientAlt
+		} else {
+			quotedSenderJID = msg.Info.Sender
+			quotedSenderAlt = msg.Info.SenderAlt
+		}
 	} else {
+		quotedSenderJID = msg.Info.Sender
+		quotedSenderAlt = msg.Info.SenderAlt
+	}
+
+	utils.DefaultMessageCache.PutQuotedIfBetter(botID, quotedID, &utils.CachedMessage{
+		Info: waTypes.MessageInfo{
+			MessageSource: waTypes.MessageSource{
+				Sender:    quotedSenderJID,
+				SenderAlt: quotedSenderAlt,
+				Chat:      msg.Info.Chat,
+				IsGroup:   msg.Info.IsGroup,
+			},
+			ID:        quotedID,
+			Timestamp: msg.Info.Timestamp,
+		},
+		Message:    quotedCore,
+		IsViewOnce: quotedIsViewOnce,
+		StoredAt:   time.Now(),
+	})
+
+	if !autoConf.AutoGetOn || !utils.IsMediaMessage(quotedCore) {
 		return
 	}
 
-	// Format the final caption text
-	finalCaption := fmt.Sprintf("📥 *Auto-Get*\nReceived media from: %s", senderNum)
-	if origCaption != "" {
-		finalCaption += fmt.Sprintf("\n\n_Original Caption:_\n%s", origCaption)
+	quotedSenderNum := utils.ResolvePhoneNumber(client, quotedSenderJID, quotedSenderAlt)
+	if !isTargeted(autoConf.AutoGetTargets, quotedSenderNum) {
+		return
 	}
-
-	// FALLBACK ROUTER: If download fails (direct View Once block), route the raw keys
-	if err != nil {
-		fmt.Printf("  [AUTO-GET] Download failed (%v), falling back to router method...\n", err)
-
-		if coreMsg.ImageMessage != nil {
-			img := proto.Clone(coreMsg.ImageMessage).(*waE2E.ImageMessage)
-			img.Caption = proto.String(finalCaption)
-			client.SendMessage(context.Background(), ownerJID, &waE2E.Message{ImageMessage: img})
-		} else if coreMsg.VideoMessage != nil {
-			vid := proto.Clone(coreMsg.VideoMessage).(*waE2E.VideoMessage)
-			vid.Caption = proto.String(finalCaption)
-			client.SendMessage(context.Background(), ownerJID, &waE2E.Message{VideoMessage: vid})
-		} else if coreMsg.AudioMessage != nil {
-			aud := proto.Clone(coreMsg.AudioMessage).(*waE2E.AudioMessage)
-			client.SendMessage(context.Background(), ownerJID, &waE2E.Message{AudioMessage: aud})
-		} else if coreMsg.DocumentMessage != nil {
-			doc := proto.Clone(coreMsg.DocumentMessage).(*waE2E.DocumentMessage)
-			doc.Caption = proto.String(finalCaption)
-			client.SendMessage(context.Background(), ownerJID, &waE2E.Message{DocumentMessage: doc})
-		}
+	if !utils.DefaultMessageCache.TryMarkAutoGet(botID, quotedID) {
 		return
 	}
 
-	// SUCCESS: Upload the downloaded data to create a permanent image
-	uploaded, err := client.Upload(context.Background(), data, mediaType)
-	if err != nil {
-		fmt.Printf("  [AUTO-GET] Upload failed: %v\n", err)
-		return
-	}
+	chatLabel := resolveChatLabel(client, msg.Info)
+	go processAutoGet(client, botID, quotedID, quotedCore, ownerJID, quotedSenderNum, chatLabel, quotedIsViewOnce)
+}
 
-	var finalMsg waE2E.Message
-	if coreMsg.ImageMessage != nil {
-		finalMsg.ImageMessage = &waE2E.ImageMessage{
-			URL:           proto.String(uploaded.URL),
-			DirectPath:    proto.String(uploaded.DirectPath),
-			MediaKey:      uploaded.MediaKey,
-			Mimetype:      coreMsg.ImageMessage.Mimetype,
-			FileEncSHA256: uploaded.FileEncSHA256,
-			FileSHA256:    uploaded.FileSHA256,
-			FileLength:    proto.Uint64(uploaded.FileLength),
-			Caption:       proto.String(finalCaption),
+func processAutoGet(
+	client *whatsmeow.Client,
+	botID, msgID string,
+	coreMsg *waE2E.Message,
+	ownerJID waTypes.JID,
+	senderNum, chatLabel string,
+	isViewOnce bool,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var preDownloaded []byte
+	if cached, ok := utils.DefaultMessageCache.Get(botID, msgID); ok && cached != nil {
+		if len(cached.MediaData) > 0 {
+			preDownloaded = cached.MediaData
 		}
-	} else if coreMsg.VideoMessage != nil {
-		finalMsg.VideoMessage = &waE2E.VideoMessage{
-			URL:           proto.String(uploaded.URL),
-			DirectPath:    proto.String(uploaded.DirectPath),
-			MediaKey:      uploaded.MediaKey,
-			Mimetype:      coreMsg.VideoMessage.Mimetype,
-			FileEncSHA256: uploaded.FileEncSHA256,
-			FileSHA256:    uploaded.FileSHA256,
-			FileLength:    proto.Uint64(uploaded.FileLength),
-			Caption:       proto.String(finalCaption),
-		}
-	} else if coreMsg.AudioMessage != nil {
-		finalMsg.AudioMessage = &waE2E.AudioMessage{
-			URL:           proto.String(uploaded.URL),
-			DirectPath:    proto.String(uploaded.DirectPath),
-			MediaKey:      uploaded.MediaKey,
-			Mimetype:      coreMsg.AudioMessage.Mimetype,
-			FileEncSHA256: uploaded.FileEncSHA256,
-			FileSHA256:    uploaded.FileSHA256,
-			FileLength:    proto.Uint64(uploaded.FileLength),
-			PTT:           coreMsg.AudioMessage.PTT,
-		}
-	} else if coreMsg.DocumentMessage != nil {
-		finalMsg.DocumentMessage = &waE2E.DocumentMessage{
-			URL:           proto.String(uploaded.URL),
-			DirectPath:    proto.String(uploaded.DirectPath),
-			MediaKey:      uploaded.MediaKey,
-			Mimetype:      coreMsg.DocumentMessage.Mimetype,
-			FileName:      coreMsg.DocumentMessage.FileName,
-			FileEncSHA256: uploaded.FileEncSHA256,
-			FileSHA256:    uploaded.FileSHA256,
-			FileLength:    proto.Uint64(uploaded.FileLength),
-			Caption:       proto.String(finalCaption),
+		if !utils.HasDownloadableMedia(coreMsg) && utils.HasDownloadableMedia(cached.Message) {
+			coreMsg = cached.Message
 		}
 	}
 
-	_, err = client.SendMessage(context.Background(), ownerJID, &finalMsg)
-	if err != nil {
-		fmt.Printf("  [AUTO-GET] Failed to forward permanent media to owner: %v\n", err)
+	voBadge := ""
+	if isViewOnce {
+		voBadge = " (View-Once)"
+	}
+	header := fmt.Sprintf("📥 *Auto-Get*%s\n*From:* %s\n*Chat:* %s", voBadge, senderNum, chatLabel)
+	caption := header
+	if origCaption := utils.MediaCaption(coreMsg); origCaption != "" {
+		caption += "\n\n_Original Caption:_\n" + origCaption
+	}
+
+	if err := utils.ForwardPermanentMedia(ctx, client, ownerJID, coreMsg, preDownloaded, caption, header); err != nil {
+		fmt.Printf("  [AUTO-GET] Failed to save media (id=%s): %v\n", msgID, err)
+		// Allow a later reply with valid media keys to retry.
+		utils.DefaultMessageCache.UnmarkAutoGet(botID, msgID)
 	}
 }
