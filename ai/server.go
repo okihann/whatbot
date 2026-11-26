@@ -15,6 +15,13 @@ import (
 )
 
 func StartServer() {
+	StartServerWithExtra(nil)
+}
+
+// StartServerWithExtra starts the HTTP server on AppConfig.ServerPort and allows
+// callers (e.g. the WhatsApp Web Android Companion UI) to register extra routes
+// on the same ServeMux so both local and ngrok traffic share a single port.
+func StartServerWithExtra(mount func(mux *http.ServeMux)) {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/v1/models", authMiddleware(handleGetModels))
@@ -28,7 +35,11 @@ func StartServer() {
 	mux.HandleFunc("/upload", authMiddleware(handleFileUpload))
 	mux.HandleFunc("/v1/upload", authMiddleware(handleFileUpload)) // fallback
 
-	log.Printf("🌐 [SERVER] API Server started on port %s...\n", AppConfig.ServerPort)
+	if mount != nil {
+		mount(mux)
+	}
+
+	log.Printf("🌐 [SERVER] HTTP + WhatsApp Web Server started on port %s...\n", AppConfig.ServerPort)
 
 	go RefreshModels()
 
