@@ -18,9 +18,10 @@ import (
 
 func init() {
 	handlers.RegisterCommand(types.Command{
-		Name:     "traceanime",
-		Category: "anime",
-		Execute:  executeTraceAnime,
+		Name:        "traceanime",
+		Description: "Identifies the anime, episode, and timestamp from a screenshot.",
+		Category:    "anime",
+		Execute:     executeTraceAnime,
 	})
 }
 

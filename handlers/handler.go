@@ -2,13 +2,11 @@ package handlers
 
 import (
 	"bot/config"
-	"bot/session"
 	"bot/types"
 	"bot/utils"
 	"fmt"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -48,7 +46,7 @@ func RegisterInteractiveSessionHandler(handler InteractiveSessionFunc) {
 // categoryEmojis maps category names to emojis for a more visual menu.
 var categoryEmojis = map[string]string{
 	"main": "📋", "downloader": "📥", "search": "🔎", "ai": "🤖",
-	"game": "🎮", "rpg": "⚔️", "xp": "🌟", "sticker": "🖼️",
+	"game": "🎮", "rpg": "⚔️", "xp": "🌟", "sticker": "🖼️", "media": "🖼️",
 	"kerang": "🐚", "quotes": "📜", "fun": "😂", "anime": "🌸",
 	"group": "👥", "premium": "💎", "nsfw": "🔞", "internet": "🌐",
 	"genshin": "✨", "news": "📰", "tools": "🛠️", "primbon": "🔮",
@@ -80,7 +78,7 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 		return
 	}
 
-	// 2. Check if the message is part of an INTERACTIVE SESSION (like registration).
+	// 2. Check if the message is part of an INTERACTIVE SESSION.
 	for _, handler := range interactiveSessionHandlers {
 		if handler(client, msg) {
 			return
@@ -92,39 +90,11 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 	jid := msg.Info.Chat
 
 	if strings.HasPrefix(text, "->") {
-		// Find the 'eval' command specifically
 		if cmd, ok := Commands["eval"]; ok {
-			// Trim the prefix and any leading space
 			argsString := strings.TrimSpace(strings.TrimPrefix(text, "->"))
-			// Split the rest of the string into arguments
 			args := strings.Fields(argsString)
 			cmd.Execute(client, msg, args)
-			return // Stop processing
-		}
-	}
-
-	// Interactive Help Menu Logic
-	ctxInfo := utils.ExtractContextInfo(msg.Message)
-	if ctxInfo != nil && ctxInfo.StanzaID != nil {
-		quotedMsgID := ctxInfo.GetStanzaID()
-		if helpSession, found := session.GetHelpSession(jid.String()); found && helpSession.MessageID == quotedMsgID {
-			choice, err := strconv.Atoi(text)
-			if err == nil && choice > 0 && choice <= len(helpSession.Categories) {
-				chosenCategory := helpSession.Categories[choice-1]
-				session.ClearHelpSession(jid.String())
-				conf, _ := config.LoadConfig()
-				categories := make(map[string][]string)
-				seen := make(map[string]bool)
-				for _, cmd := range Commands {
-					if !seen[cmd.Name] {
-						categories[cmd.Category] = append(categories[cmd.Category], cmd.Name)
-						seen[cmd.Name] = true
-					}
-				}
-				categoryMenuText, _ := GenerateHelpMenu(conf, categories, chosenCategory, msg.Info.PushName)
-				utils.SendReply(client, jid, categoryMenuText)
-				return
-			}
+			return
 		}
 	}
 

@@ -17,8 +17,18 @@ import (
 )
 
 func init() {
-	handlers.RegisterCommand(types.Command{Name: "shazam", Category: "media", Execute: executeShazam})
-	handlers.RegisterCommand(types.Command{Name: "sz", Category: "media", Execute: executeShazam})
+	handlers.RegisterCommand(types.Command{
+		Name:        "shazam",
+		Description: "Identifies a song from a replied-to audio or video clip.",
+		Category:    "media",
+		Execute:     executeShazam,
+	})
+	handlers.RegisterCommand(types.Command{
+		Name:        "sz",
+		Description: "Alias for /shazam.",
+		Category:    "media",
+		Execute:     executeShazam,
+	})
 }
 
 func executeShazam(client *whatsmeow.Client, msg *events.Message, args []string) {

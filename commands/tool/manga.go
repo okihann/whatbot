@@ -16,7 +16,12 @@ import (
 )
 
 func init() {
-	handlers.RegisterCommand(types.Command{Name: "manga", Category: "anime", Execute: executeManga})
+	handlers.RegisterCommand(types.Command{
+		Name:        "manga",
+		Description: "Searches MyAnimeList for manga details and synopsis.",
+		Category:    "anime",
+		Execute:     executeManga,
+	})
 }
 
 func executeManga(client *whatsmeow.Client, msg *events.Message, args []string) {
