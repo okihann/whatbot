@@ -213,6 +213,30 @@ func CacheOnlyMessage(client *whatsmeow.Client, msg *events.Message) {
 	}
 }
 
+// HandleUnavailableViewOnce records when WhatsApp blocks a view-once message
+// with <unavailable type="view_once"> (typical when paired as a Web client)
+// and sends a best-effort peer resend request to the primary phone.
+func HandleUnavailableViewOnce(client *whatsmeow.Client, evt *events.UndecryptableMessage) {
+	if evt == nil || client == nil || client.Store == nil || client.Store.ID == nil {
+		return
+	}
+	if !evt.IsUnavailable || evt.UnavailableType != events.UnavailableTypeViewOnce {
+		return
+	}
+	botID := client.Store.ID.ToNonAD().User
+	utils.DefaultMessageCache.MarkUnavailableViewOnce(botID, evt.Info.ID, evt.Info)
+	fmt.Printf("⚠️ [VIEW-ONCE] WhatsApp sent <unavailable type=\"view_once\"> for %s (account %s). Re-pair via QR to register as Android companion.\n", evt.Info.ID, botID)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, err := client.SendPeerMessage(ctx, client.BuildUnavailableMessageRequest(evt.Info.Chat, evt.Info.Sender, evt.Info.ID))
+		if err != nil {
+			fmt.Printf("  [VIEW-ONCE] Primary phone resend request for %s failed: %v\n", evt.Info.ID, err)
+		}
+	}()
+}
+
 func isRevokeMessage(evt *events.Message, coreMsg *waE2E.Message) bool {
 	if coreMsg != nil && coreMsg.GetProtocolMessage() != nil &&
 		coreMsg.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_REVOKE {

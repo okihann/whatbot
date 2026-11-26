@@ -20,11 +20,12 @@ const (
 // for view-once media) so anti-delete, auto-get, and /get share a single source
 // of truth.
 type CachedMessage struct {
-	Info       waTypes.MessageInfo
-	Message    *waE2E.Message
-	IsViewOnce bool
-	MediaData  []byte
-	StoredAt   time.Time
+	Info                waTypes.MessageInfo
+	Message             *waE2E.Message
+	IsViewOnce          bool
+	UnavailableViewOnce bool
+	MediaData           []byte
+	StoredAt            time.Time
 }
 
 // MessageCache is a thread-safe, TTL-evicted, memory-bounded message cache.
@@ -162,6 +163,34 @@ func (c *MessageCache) SetMediaData(botID, msgID string, data []byte) {
 	entry.MediaData = copied
 	c.totalMediaBytes += int64(len(copied))
 	c.enforceMediaBudgetLocked()
+}
+
+// MarkUnavailableViewOnce records that WhatsApp sent an <unavailable type="view_once">
+// placeholder for this message ID instead of ciphertext.
+func (c *MessageCache) MarkUnavailableViewOnce(botID, msgID string, info waTypes.MessageInfo) {
+	if msgID == "" {
+		return
+	}
+	c.startCleanup()
+	key := cacheKey(botID, msgID)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if existing, ok := c.entries[key]; ok {
+		existing.IsViewOnce = true
+		existing.UnavailableViewOnce = true
+		return
+	}
+	c.entries[key] = &CachedMessage{
+		Info:                info,
+		IsViewOnce:          true,
+		UnavailableViewOnce: true,
+		StoredAt:            time.Now(),
+	}
+	if len(c.entries) > maxCacheEntries {
+		c.evictOldestLocked()
+	}
 }
 
 // Get returns a snapshot copy of the cached message for (botID, msgID).

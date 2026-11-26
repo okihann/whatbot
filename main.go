@@ -24,6 +24,7 @@ import (
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"
+	"go.mau.fi/whatsmeow/proto/waWa6"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types/events"
@@ -40,6 +41,33 @@ var (
 	ngrokConfig   ngrok.Config
 )
 
+// configureAndroidCompanion presents the client as a linked Android companion
+// device (removing WebInfo) so WhatsApp delivers view-once media instead of
+// blocking it with <unavailable type="view_once">. Existing sessions paired
+// under Web/iPad must be re-paired once via QR for WhatsApp to update their
+// registered platform type.
+func configureAndroidCompanion() {
+	if store.DeviceProps != nil {
+		store.DeviceProps.Os = proto.String("Android")
+		store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_ANDROID_PHONE.Enum()
+		store.DeviceProps.RequireFullSync = proto.Bool(false)
+		store.DeviceProps.Version = &waCompanionReg.DeviceProps_AppVersion{
+			Primary:    proto.Uint32(2),
+			Secondary:  proto.Uint32(24),
+			Tertiary:   proto.Uint32(24),
+			Quaternary: proto.Uint32(0),
+		}
+	}
+	if store.BaseClientPayload != nil && store.BaseClientPayload.UserAgent != nil {
+		store.BaseClientPayload.UserAgent.Platform = waWa6.ClientPayload_UserAgent_ANDROID.Enum()
+		store.BaseClientPayload.UserAgent.Device = proto.String("SM-G900F")
+		store.BaseClientPayload.UserAgent.Manufacturer = proto.String("Samsung")
+		store.BaseClientPayload.UserAgent.OsVersion = proto.String("14")
+		store.BaseClientPayload.UserAgent.OsBuildNumber = proto.String("UP1A.231005.007")
+		store.BaseClientPayload.WebInfo = nil
+	}
+}
+
 func setupClient(deviceStore *store.Device) {
 	clientLog := waLog.Stdout("Client", "INFO", true)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
@@ -48,6 +76,8 @@ func setupClient(deviceStore *store.Device) {
 		switch v := evt.(type) {
 		case *events.Connected:
 			fmt.Printf("\n✅ Bot %s is live and connected!\n", client.Store.ID)
+		case *events.UndecryptableMessage:
+			owner.HandleUnavailableViewOnce(client, v)
 		case *events.Message:
 			// Allow a 15s clock-skew grace window; older offline messages are
 			// cached for anti-delete / /get without triggering commands.
@@ -106,10 +136,7 @@ func stopNgrok() {
 }
 
 func main() {
-	if store.DeviceProps != nil {
-		store.DeviceProps.Os = proto.String("iPadOS")
-		store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_IPAD.Enum()
-	}
+	configureAndroidCompanion()
 
 	ai.LoadEnv()
 	ngrokConfig = ngrok.LoadConfig(ai.AppConfig.ServerPort)

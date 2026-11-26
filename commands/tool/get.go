@@ -43,12 +43,10 @@ func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
 	quotedMsg := utils.UnwrapMessage(ctxInfo.QuotedMessage)
 	cached, hasCached := utils.DefaultMessageCache.Get(botID, quotedID)
 
-	// Pick the best available media template and any eagerly cached bytes.
-	// View-once replies often strip URL/DirectPath on the quoted stub while
-	// the cached original message still has full metadata or pre-downloaded bytes.
 	var candidates []*waE2E.Message
 	var preDownloaded []byte
 	var isViewOnce bool
+	var unavailableVO bool
 
 	if hasCached && cached != nil {
 		if len(cached.MediaData) > 0 {
@@ -57,21 +55,24 @@ func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
 		if cached.IsViewOnce {
 			isViewOnce = true
 		}
+		if cached.UnavailableViewOnce {
+			unavailableVO = true
+		}
 	}
 	if utils.IsViewOnceMessage(nil, ctxInfo.QuotedMessage) {
 		isViewOnce = true
 	}
 
-	// Prefer the candidate that actually has downloadable URL/DirectPath.
+	// Prefer candidates that actually carry downloadable URL / DirectPath.
 	if hasCached && cached != nil && utils.HasDownloadableMedia(cached.Message) {
 		candidates = append(candidates, cached.Message)
 	}
 	if utils.HasDownloadableMedia(quotedMsg) {
 		candidates = append(candidates, quotedMsg)
 	}
-	// If neither has URL/DirectPath but we still have pre-cached bytes or a media
-	// skeleton, include them so pre-downloaded bytes can still be re-uploaded.
-	if len(candidates) == 0 {
+
+	// If neither has URL/DirectPath, check whether we still have pre-cached bytes.
+	if len(candidates) == 0 && len(preDownloaded) > 0 {
 		if hasCached && cached != nil && utils.IsMediaMessage(cached.Message) {
 			candidates = append(candidates, cached.Message)
 		} else if utils.IsMediaMessage(quotedMsg) {
@@ -80,6 +81,14 @@ func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
 	}
 
 	if len(candidates) == 0 {
+		if isViewOnce || unavailableVO {
+			fmt.Printf("[GET] View-once media unavailable (bot=%s id=%s unavailableVO=%v hasCached=%v quotedHasMedia=%v quotedHasURL=%v)\n",
+				botID, quotedID, unavailableVO, hasCached, utils.IsMediaMessage(quotedMsg), utils.HasDownloadableMedia(quotedMsg))
+			utils.SendReply(client, msg.Info.Chat,
+				"❌ WhatsApp blocked this view-once media on this linked device and stripped its media keys from the reply.\n\n"+
+					"To fix this for future view-once messages, remove & re-pair this account via QR (`remove <id>` then `add` in the bot console) so WhatsApp registers it as an Android companion device.")
+			return
+		}
 		utils.SendReply(client, msg.Info.Chat, "⚠️ The replied-to message does not contain any downloadable media.")
 		return
 	}
@@ -118,7 +127,8 @@ func executeGet(client *whatsmeow.Client, msg *events.Message, args []string) {
 			lastErr = err
 		}
 
-		fmt.Printf("[GET] Failed to recover media (id=%s): %v\n", quotedID, lastErr)
-		utils.SendReply(client, chatJID, "❌ Sorry, I couldn't download or recover that media (it may have expired on WhatsApp servers).")
+		fmt.Printf("[GET] Failed to recover media (bot=%s id=%s candidates=%d preCached=%dB): %v\n",
+			botID, quotedID, len(candidates), len(preDownloaded), lastErr)
+		utils.SendReply(client, chatJID, fmt.Sprintf("❌ Sorry, I couldn't download or recover that media (%v).", lastErr))
 	}()
 }
