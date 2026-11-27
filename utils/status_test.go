@@ -76,4 +76,19 @@ func TestStatusSafeContactStoreFiltersMixedPNAndLID(t *testing.T) {
 	if _, ok := statusContacts[pn2]; !ok {
 		t.Fatalf("expected lidMapped to resolve to pn2 in status recipients")
 	}
+
+	// Blacklist ("My Contacts Except..."): if lidMapped is blacklisted, its resolved PN (pn2) must also be excluded!
+	blacklist := map[waTypes.JID]struct{}{
+		lidMapped: {},
+	}
+	blContacts, err := dev.Contacts.GetAllContacts(WithStatusPNOnlyContacts(context.Background(), blacklist))
+	if err != nil {
+		t.Fatalf("GetAllContacts(blacklist): %v", err)
+	}
+	if len(blContacts) != 1 {
+		t.Fatalf("expected 1 contact after excluding blacklisted LID, got %d: %+v", len(blContacts), blContacts)
+	}
+	if _, leaked := blContacts[pn2]; leaked {
+		t.Fatalf("blacklisted contact pn2 leaked into status recipients!")
+	}
 }

@@ -477,7 +477,7 @@ func cmdSetPrivacy(client *whatsmeow.Client, msg *events.Message, args []string)
 func cmdStatusPost(client *whatsmeow.Client, msg *events.Message, args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	statusCtx := utils.WithStatusPNOnlyContacts(ctx)
+	statusCtx, _ := utils.PrepareStatusContext(ctx, client)
 	statusJID := waTypes.StatusBroadcastJID
 	caption := strings.TrimSpace(strings.Join(args, " "))
 
