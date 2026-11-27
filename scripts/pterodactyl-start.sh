@@ -41,7 +41,7 @@ http_get() {
 
   if command -v curl >/dev/null 2>&1; then
     if [ -n "$out" ]; then
-      curl -fsSL --retry 3 --connect-timeout 15 --max-time 180 \
+      curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 \
         -H "Accept: application/vnd.github+json" \
         -H "User-Agent: NopeBot-Pterodactyl-Updater" \
         "${auth_header[@]}" \
@@ -161,7 +161,11 @@ update_from_github() {
   asset_name="$(basename "$asset_url")"
 
   local tmpdir
-  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/nopebot-update.XXXXXX")"
+  # Use the current server directory (/home/container) instead of /tmp because
+  # Pterodactyl containers often mount /tmp as a tiny RAM tmpfs (<100MB), which
+  # causes "curl: (23) Failure writing output to destination" on large releases.
+  rm -rf ./.nopebot_tmp.* 2>/dev/null || true
+  tmpdir="$(mktemp -d "./.nopebot_tmp.XXXXXX")"
   trap 'rm -rf "$tmpdir"' RETURN
 
   log "Downloading ${asset_name}..."
@@ -191,6 +195,7 @@ update_from_github() {
   mkdir -p "${tmpdir}/extracted"
   log "Extracting ${asset_name}..."
   extract_archive "${tmpdir}/${asset_name}" "${tmpdir}/extracted"
+  rm -f "${tmpdir}/${asset_name}"
 
   # Find the extracted executable binary
   local found_bin=""
