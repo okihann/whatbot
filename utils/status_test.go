@@ -4,91 +4,143 @@ import (
 	"context"
 	"testing"
 
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	waTypes "go.mau.fi/whatsmeow/types"
+	"google.golang.org/protobuf/proto"
 )
-
-type fakeContactStore struct {
-	store.ContactStore
-	contacts map[waTypes.JID]waTypes.ContactInfo
-}
-
-func (f *fakeContactStore) GetAllContacts(ctx context.Context) (map[waTypes.JID]waTypes.ContactInfo, error) {
-	return f.contacts, nil
-}
 
 type fakeLIDStore struct {
 	store.LIDStore
+	pnToLID map[waTypes.JID]waTypes.JID
 	lidToPN map[waTypes.JID]waTypes.JID
 }
 
-func (f *fakeLIDStore) GetPNForLID(ctx context.Context, lid waTypes.JID) (waTypes.JID, error) {
-	return f.lidToPN[lid], nil
-}
-
-func TestStatusSafeContactStoreFiltersMixedPNAndLID(t *testing.T) {
-	pn1 := waTypes.NewJID("6281110001", waTypes.DefaultUserServer)
-	pn2 := waTypes.NewJID("6281110002", waTypes.DefaultUserServer)
-	lidMapped := waTypes.NewJID("10000001", waTypes.HiddenUserServer)
-	lidUnmapped := waTypes.NewJID("10000002", waTypes.HiddenUserServer)
-	newsletter := waTypes.NewJID("120363999", waTypes.NewsletterServer)
-
-	dev := &store.Device{
-		Contacts: &fakeContactStore{
-			contacts: map[waTypes.JID]waTypes.ContactInfo{
-				pn1:         {Found: true, FullName: "Alice"},
-				lidMapped:   {Found: true, FullName: "Bob LID"},
-				lidUnmapped: {Found: true, FullName: "Unmapped LID"},
-				newsletter:  {Found: true, FullName: "Some Channel"},
-			},
-		},
-		LIDs: &fakeLIDStore{
-			lidToPN: map[waTypes.JID]waTypes.JID{
-				lidMapped: pn2,
-			},
-		},
-	}
-
-	WrapDeviceForStatusBroadcast(dev)
-
-	// Normal context preserves all contacts untouched.
-	normal, err := dev.Contacts.GetAllContacts(context.Background())
-	if err != nil || len(normal) != 4 {
-		t.Fatalf("expected 4 contacts in normal ctx, got %d err=%v", len(normal), err)
-	}
-
-	// Status context returns strictly @s.whatsapp.net PN JIDs (pn1 + resolved pn2), zero @lid or @newsletter.
-	statusContacts, err := dev.Contacts.GetAllContacts(WithStatusPNOnlyContacts(context.Background()))
-	if err != nil {
-		t.Fatalf("GetAllContacts(status): %v", err)
-	}
-	if len(statusContacts) != 2 {
-		t.Fatalf("expected 2 PN-only contacts for status, got %d: %+v", len(statusContacts), statusContacts)
-	}
-	for jid := range statusContacts {
-		if jid.Server != waTypes.DefaultUserServer {
-			t.Fatalf("unexpected non-PN server in status recipients: %s", jid)
+func (f *fakeLIDStore) GetManyLIDsForPNs(ctx context.Context, pns []waTypes.JID) (map[waTypes.JID]waTypes.JID, error) {
+	out := make(map[waTypes.JID]waTypes.JID)
+	for _, pn := range pns {
+		if lid, ok := f.pnToLID[pn.ToNonAD()]; ok {
+			out[pn.ToNonAD()] = lid
 		}
 	}
-	if _, ok := statusContacts[pn1]; !ok {
-		t.Fatalf("missing pn1 in status recipients")
+	return out, nil
+}
+
+func (f *fakeLIDStore) GetPNForLID(ctx context.Context, lid waTypes.JID) (waTypes.JID, error) {
+	return f.lidToPN[lid.ToNonAD()], nil
+}
+
+func TestResolveLIDStatusRecipientsAllPrivacyModes(t *testing.T) {
+	ownLID := waTypes.NewJID("9990001", waTypes.HiddenUserServer)
+	pnAlice := waTypes.NewJID("6281110001", waTypes.DefaultUserServer)
+	lidAlice := waTypes.NewJID("10000001", waTypes.HiddenUserServer)
+	pnBob := waTypes.NewJID("6281110002", waTypes.DefaultUserServer)
+	lidBob := waTypes.NewJID("10000002", waTypes.HiddenUserServer)
+	pnUnmapped := waTypes.NewJID("6281110003", waTypes.DefaultUserServer)
+	lidCarol := waTypes.NewJID("10000003", waTypes.HiddenUserServer)
+	newsletter := waTypes.NewJID("120363999", waTypes.NewsletterServer)
+
+	contacts := map[waTypes.JID]waTypes.ContactInfo{
+		pnAlice:    {Found: true, FullName: "Alice"},
+		pnBob:      {Found: true, FullName: "Bob"},
+		pnUnmapped: {Found: true, FullName: "No LID"},
+		lidCarol:   {Found: true, FullName: "Carol LID"},
+		newsletter: {Found: true, FullName: "Channel"},
 	}
-	if _, ok := statusContacts[pn2]; !ok {
-		t.Fatalf("expected lidMapped to resolve to pn2 in status recipients")
+	lids := &fakeLIDStore{
+		pnToLID: map[waTypes.JID]waTypes.JID{
+			pnAlice: lidAlice,
+			pnBob:   lidBob,
+		},
+		lidToPN: map[waTypes.JID]waTypes.JID{
+			lidAlice: pnAlice,
+			lidBob:   pnBob,
+		},
 	}
 
-	// Blacklist ("My Contacts Except..."): if lidMapped is blacklisted, its resolved PN (pn2) must also be excluded!
-	blacklist := map[waTypes.JID]struct{}{
-		lidMapped: {},
-	}
-	blContacts, err := dev.Contacts.GetAllContacts(WithStatusPNOnlyContacts(context.Background(), blacklist))
+	// 1. My Contacts: Alice (resolved LID), Bob (resolved LID), Carol (LID), Own LID -> 4 pure @lid recipients
+	recContacts, err := ResolveLIDStatusRecipients(context.Background(), ownLID, waTypes.StatusPrivacy{Type: waTypes.StatusPrivacyTypeContacts}, contacts, lids)
 	if err != nil {
-		t.Fatalf("GetAllContacts(blacklist): %v", err)
+		t.Fatalf("Contacts mode error: %v", err)
 	}
-	if len(blContacts) != 1 {
-		t.Fatalf("expected 1 contact after excluding blacklisted LID, got %d: %+v", len(blContacts), blContacts)
+	if len(recContacts) != 4 {
+		t.Fatalf("expected 4 LID recipients in Contacts mode, got %d: %v", len(recContacts), recContacts)
 	}
-	if _, leaked := blContacts[pn2]; leaked {
-		t.Fatalf("blacklisted contact pn2 leaked into status recipients!")
+	for _, r := range recContacts {
+		if r.Server != waTypes.HiddenUserServer {
+			t.Fatalf("non-LID recipient in Contacts mode: %s", r)
+		}
+	}
+
+	// 2. My Contacts Except... (Blacklist with PN pnBob AND lidCarol): only Alice + Own LID remain
+	recBL, err := ResolveLIDStatusRecipients(context.Background(), ownLID, waTypes.StatusPrivacy{
+		Type: waTypes.StatusPrivacyTypeBlacklist,
+		List: []waTypes.JID{pnBob, lidCarol},
+	}, contacts, lids)
+	if err != nil {
+		t.Fatalf("Blacklist mode error: %v", err)
+	}
+	if len(recBL) != 2 {
+		t.Fatalf("expected 2 LID recipients (Alice + Own) after Blacklist, got %d: %v", len(recBL), recBL)
+	}
+	for _, r := range recBL {
+		if r == lidBob || r == lidCarol {
+			t.Fatalf("blacklisted contact leaked: %s", r)
+		}
+	}
+
+	// 3. Only Share With... (Whitelist with mixed PN pnAlice + LID lidCarol): resolves both to @lid + Own LID -> 3
+	recWL, err := ResolveLIDStatusRecipients(context.Background(), ownLID, waTypes.StatusPrivacy{
+		Type: waTypes.StatusPrivacyTypeWhitelist,
+		List: []waTypes.JID{pnAlice, lidCarol},
+	}, contacts, lids)
+	if err != nil {
+		t.Fatalf("Whitelist mode error: %v", err)
+	}
+	if len(recWL) != 3 {
+		t.Fatalf("expected 3 LID recipients in Whitelist mode, got %d: %v", len(recWL), recWL)
+	}
+	for _, r := range recWL {
+		if r.Server != waTypes.HiddenUserServer {
+			t.Fatalf("non-LID recipient in Whitelist mode: %s", r)
+		}
+	}
+}
+
+func TestApplyStatusReshareableAndHostedDeviceFilter(t *testing.T) {
+	vid := &waE2E.Message{
+		VideoMessage: &waE2E.VideoMessage{Caption: proto.String("hi")},
+	}
+	ApplyStatusReshareable(vid)
+	if !vid.VideoMessage.GetContextInfo().GetFeatureEligibilities().GetCanBeReshared() {
+		t.Fatalf("expected VideoMessage CanBeReshared=true")
+	}
+
+	txt := &waE2E.Message{
+		ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String("hello")},
+	}
+	ApplyStatusReshareable(txt)
+	if !txt.ExtendedTextMessage.GetContextInfo().GetFeatureEligibilities().GetCanBeReshared() {
+		t.Fatalf("expected ExtendedTextMessage CanBeReshared=true")
+	}
+
+	img := &waE2E.Message{
+		ImageMessage: &waE2E.ImageMessage{Caption: proto.String("pic")},
+	}
+	ApplyStatusReshareable(img)
+	if !img.ImageMessage.GetContextInfo().GetFeatureEligibilities().GetCanBeReshared() {
+		t.Fatalf("expected ImageMessage CanBeReshared=true")
+	}
+
+	// Hosted and PN devices must be stripped from LID status device list
+	devs := []waTypes.JID{
+		{User: "1001", Device: 0, Server: waTypes.HiddenUserServer},
+		{User: "1001", Device: 99, Server: waTypes.HostedLIDServer},
+		{User: "628111", Device: 0, Server: waTypes.DefaultUserServer},
+		{User: "628111", Device: 99, Server: waTypes.HostedServer},
+	}
+	filtered := filterLIDStatusDevices(devs)
+	if len(filtered) != 1 || filtered[0].Server != waTypes.HiddenUserServer {
+		t.Fatalf("expected only 1 non-hosted LID device, got %v", filtered)
 	}
 }

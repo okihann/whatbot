@@ -477,8 +477,6 @@ func cmdSetPrivacy(client *whatsmeow.Client, msg *events.Message, args []string)
 func cmdStatusPost(client *whatsmeow.Client, msg *events.Message, args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	statusCtx, _ := utils.PrepareStatusContext(ctx, client)
-	statusJID := waTypes.StatusBroadcastJID
 	caption := strings.TrimSpace(strings.Join(args, " "))
 
 	quoted := utils.ExtractQuotedOrOwnMessage(msg)
@@ -488,16 +486,55 @@ func cmdStatusPost(client *whatsmeow.Client, msg *events.Message, args []string)
 			utils.SendReply(client, msg.Info.Chat, "❌ Failed to download media: "+err.Error())
 			return
 		}
+		var statusMsg *waE2E.Message
 		if quoted.GetImageMessage() != nil {
-			_, err = utils.SendImageData(statusCtx, client, statusJID, data, mimeType, caption)
+			up, upErr := client.Upload(ctx, data, whatsmeow.MediaImage)
+			if upErr != nil {
+				utils.SendReply(client, msg.Info.Chat, "❌ Status upload failed: "+upErr.Error())
+				return
+			}
+			if mimeType == "" {
+				mimeType = "image/jpeg"
+			}
+			statusMsg = &waE2E.Message{
+				ImageMessage: &waE2E.ImageMessage{
+					URL:           proto.String(up.URL),
+					DirectPath:    proto.String(up.DirectPath),
+					MediaKey:      up.MediaKey,
+					Mimetype:      proto.String(mimeType),
+					FileSHA256:    up.FileSHA256,
+					FileEncSHA256: up.FileEncSHA256,
+					FileLength:    proto.Uint64(up.FileLength),
+					Caption:       proto.String(caption),
+				},
+			}
 		} else {
-			_, err = utils.SendVideoData(statusCtx, client, statusJID, data, caption, 0, nil)
+			up, upErr := client.Upload(ctx, data, whatsmeow.MediaVideo)
+			if upErr != nil {
+				utils.SendReply(client, msg.Info.Chat, "❌ Status upload failed: "+upErr.Error())
+				return
+			}
+			statusMsg = &waE2E.Message{
+				VideoMessage: &waE2E.VideoMessage{
+					URL:           proto.String(up.URL),
+					DirectPath:    proto.String(up.DirectPath),
+					MediaKey:      up.MediaKey,
+					Mimetype:      proto.String("video/mp4"),
+					FileSHA256:    up.FileSHA256,
+					FileEncSHA256: up.FileEncSHA256,
+					FileLength:    proto.Uint64(up.FileLength),
+					Caption:       proto.String(caption),
+					Seconds:       quoted.GetVideoMessage().Seconds,
+					JPEGThumbnail: quoted.GetVideoMessage().JPEGThumbnail,
+				},
+			}
 		}
+		resp, err := utils.SendStatusBroadcast(ctx, client, statusMsg)
 		if err != nil {
 			utils.SendReply(client, msg.Info.Chat, "❌ Status post failed: "+err.Error())
 			return
 		}
-		utils.SendReply(client, msg.Info.Chat, "✅ Media posted to WhatsApp Status!")
+		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("✅ Media posted to WhatsApp Status (reshareable)!\n*ID:* `%s`", resp.ID))
 		return
 	}
 
@@ -505,7 +542,7 @@ func cmdStatusPost(client *whatsmeow.Client, msg *events.Message, args []string)
 		utils.SendReply(client, msg.Info.Chat, "Usage: `.statuspost <text>` or reply to an image/video.")
 		return
 	}
-	_, err := utils.SendStatusBroadcast(ctx, client, &waE2E.Message{
+	resp, err := utils.SendStatusBroadcast(ctx, client, &waE2E.Message{
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
 			Text:           proto.String(caption),
 			BackgroundArgb: proto.Uint32(0xFF005C4B),
@@ -515,7 +552,7 @@ func cmdStatusPost(client *whatsmeow.Client, msg *events.Message, args []string)
 		utils.SendReply(client, msg.Info.Chat, "❌ Status post failed: "+err.Error())
 		return
 	}
-	utils.SendReply(client, msg.Info.Chat, "✅ Text posted to WhatsApp Status!")
+	utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("✅ Text posted to WhatsApp Status (reshareable)!\n*ID:* `%s`", resp.ID))
 }
 
 func cmdChannelPost(client *whatsmeow.Client, msg *events.Message, args []string) {

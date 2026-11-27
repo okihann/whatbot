@@ -6,6 +6,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/mdp/qrterminal/v3 v3.2.1
+	go.mau.fi/libsignal v0.2.3
 	go.mau.fi/whatsmeow v0.0.0-20261125185702-10b99a98616e
 	golang.ngrok.com/ngrok/v2 v2.2.0
 	golang.org/x/image v0.48.0
@@ -28,7 +29,6 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/zerolog v1.35.1 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.32 // indirect
-	go.mau.fi/libsignal v0.2.3 // indirect
 	go.mau.fi/util v0.11.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.ngrok.com/muxado/v2 v2.0.1 // indirect

@@ -1,148 +1,390 @@
 package utils
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"os/exec"
+	"slices"
+	"sort"
 	"strings"
+	"time"
 
+	"go.mau.fi/libsignal/groups"
+	"go.mau.fi/libsignal/protocol"
 	"go.mau.fi/whatsmeow"
+	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	waTypes "go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 )
 
-type statusCtxKey struct{}
-
-type statusFilterConfig struct {
-	pnOnly    bool
-	blacklist map[waTypes.JID]struct{}
-}
-
-// WithStatusPNOnlyContacts tags ctx so StatusSafeContactStore returns only
-// normalized @s.whatsapp.net (PN) JIDs when whatsmeow builds status@broadcast
-// recipients, optionally excluding any JIDs in extraBlacklist (covering both
-// raw PN and LID-resolved entries for "My Contacts Except..." privacy).
-func WithStatusPNOnlyContacts(ctx context.Context, extraBlacklist ...map[waTypes.JID]struct{}) context.Context {
-	cfg := statusFilterConfig{pnOnly: true}
-	if len(extraBlacklist) > 0 && extraBlacklist[0] != nil {
-		cfg.blacklist = extraBlacklist[0]
+// ApplyStatusReshareable enables WhatsApp's "Allow Reshare" button on status
+// updates (Text, Image, Video, Audio) via ContextInfo.FeatureEligibilities.CanBeReshared.
+func ApplyStatusReshareable(msg *waE2E.Message) {
+	if msg == nil || msg.ProtocolMessage != nil {
+		return
 	}
-	return context.WithValue(ctx, statusCtxKey{}, cfg)
+	setFlag := func(ci *waE2E.ContextInfo) *waE2E.ContextInfo {
+		if ci == nil {
+			ci = &waE2E.ContextInfo{}
+		}
+		if ci.FeatureEligibilities == nil {
+			ci.FeatureEligibilities = &waE2E.ContextInfo_FeatureEligibilities{}
+		}
+		ci.FeatureEligibilities.CanBeReshared = proto.Bool(true)
+		return ci
+	}
+	if msg.ExtendedTextMessage != nil {
+		msg.ExtendedTextMessage.ContextInfo = setFlag(msg.ExtendedTextMessage.ContextInfo)
+	}
+	if msg.ImageMessage != nil {
+		msg.ImageMessage.ContextInfo = setFlag(msg.ImageMessage.ContextInfo)
+	}
+	if msg.VideoMessage != nil {
+		msg.VideoMessage.ContextInfo = setFlag(msg.VideoMessage.ContextInfo)
+	}
+	if msg.AudioMessage != nil {
+		msg.AudioMessage.ContextInfo = setFlag(msg.AudioMessage.ContextInfo)
+	}
 }
 
-// PrepareStatusContext queries the account's live status privacy settings and
-// returns a context that normalizes PN/LID contacts AND strictly honors
-// "My Contacts Except..." (Blacklist) even when WhatsApp returns @lid entries
-// in the blacklist. It also reports if Whitelist mode contains @lid entries.
-func PrepareStatusContext(ctx context.Context, client *whatsmeow.Client) (statusCtx context.Context, whitelistHasLID bool) {
+// WrapDeviceForStatusBroadcast is kept as a no-op hook for backwards compatibility;
+// SendStatusBroadcast now routes status@broadcast natively via LID (whatsmeow PR #1294).
+func WrapDeviceForStatusBroadcast(device *store.Device) {}
+
+// ResolveLIDStatusRecipients builds a pure @lid recipient list matching WhatsApp's
+// current status@broadcast protocol across ALL 3 privacy modes:
+//   - StatusPrivacyTypeContacts ("My Contacts")
+//   - StatusPrivacyTypeBlacklist ("My Contacts Except...")
+//   - StatusPrivacyTypeWhitelist ("Only Share With...")
+func ResolveLIDStatusRecipients(
+	ctx context.Context,
+	ownLID waTypes.JID,
+	priv waTypes.StatusPrivacy,
+	contacts map[waTypes.JID]waTypes.ContactInfo,
+	lids store.LIDStore,
+) ([]waTypes.JID, error) {
+	var candidates []waTypes.JID
+	if priv.Type == waTypes.StatusPrivacyTypeWhitelist {
+		candidates = priv.List
+	} else {
+		for jid, info := range contacts {
+			if len(info.FullName) > 0 {
+				candidates = append(candidates, jid)
+			}
+		}
+	}
+
+	// Gather all PN JIDs from candidates and blacklist for a single batch LID lookup.
+	pnSeen := make(map[waTypes.JID]struct{})
+	var pnList []waTypes.JID
+	addPN := func(j waTypes.JID) {
+		c := j.ToNonAD()
+		if c.Server == waTypes.DefaultUserServer {
+			if _, ok := pnSeen[c]; !ok {
+				pnSeen[c] = struct{}{}
+				pnList = append(pnList, c)
+			}
+		}
+	}
+	for _, j := range candidates {
+		addPN(j)
+	}
+	if priv.Type == waTypes.StatusPrivacyTypeBlacklist {
+		for _, j := range priv.List {
+			addPN(j)
+		}
+	}
+
+	lidMap := make(map[waTypes.JID]waTypes.JID)
+	if lids != nil && len(pnList) > 0 {
+		if m, err := lids.GetManyLIDsForPNs(ctx, pnList); err == nil && m != nil {
+			lidMap = m
+		}
+	}
+
+	// Build blacklist matching BOTH PN and LID so excluded contacts can never leak through.
 	blacklist := make(map[waTypes.JID]struct{})
-	if client != nil && client.IsConnected() {
-		if opts, err := client.GetStatusPrivacy(ctx); err == nil && len(opts) > 0 {
-			priv := opts[0]
-			switch priv.Type {
-			case waTypes.StatusPrivacyTypeBlacklist:
-				for _, raw := range priv.List {
-					clean := raw.ToNonAD()
-					blacklist[clean] = struct{}{}
-					if clean.Server == waTypes.HiddenUserServer && client.Store != nil && client.Store.LIDs != nil {
-						if pn, err := client.Store.LIDs.GetPNForLID(ctx, clean); err == nil && !pn.IsEmpty() {
-							blacklist[pn.ToNonAD()] = struct{}{}
-						}
-					}
+	if priv.Type == waTypes.StatusPrivacyTypeBlacklist {
+		for _, raw := range priv.List {
+			base := raw.ToNonAD()
+			blacklist[base] = struct{}{}
+			if base.Server == waTypes.DefaultUserServer {
+				if mapped, ok := lidMap[base]; ok && !mapped.IsEmpty() {
+					blacklist[mapped.ToNonAD()] = struct{}{}
 				}
-			case waTypes.StatusPrivacyTypeWhitelist:
-				for _, raw := range priv.List {
-					if raw.Server == waTypes.HiddenUserServer {
-						whitelistHasLID = true
-						break
-					}
+			} else if base.Server == waTypes.HiddenUserServer && lids != nil {
+				if pn, err := lids.GetPNForLID(ctx, base); err == nil && !pn.IsEmpty() {
+					blacklist[pn.ToNonAD()] = struct{}{}
 				}
 			}
 		}
 	}
-	return WithStatusPNOnlyContacts(ctx, blacklist), whitelistHasLID
-}
 
-type statusSafeContactStore struct {
-	store.ContactStore
-	lids store.LIDStore
-}
-
-func (s *statusSafeContactStore) GetAllContacts(ctx context.Context) (map[waTypes.JID]waTypes.ContactInfo, error) {
-	all, err := s.ContactStore.GetAllContacts(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if ctx == nil {
-		return all, nil
-	}
-	cfg, ok := ctx.Value(statusCtxKey{}).(statusFilterConfig)
-	if !ok || !cfg.pnOnly {
-		return all, nil
-	}
-
-	isBlacklisted := func(j waTypes.JID) bool {
-		if len(cfg.blacklist) == 0 {
-			return false
+	// Normalize every eligible recipient to @lid, deduplicated.
+	seen := make(map[waTypes.JID]struct{}, len(candidates)+1)
+	recipients := make([]waTypes.JID, 0, len(candidates)+1)
+	for _, raw := range candidates {
+		base := raw.ToNonAD()
+		target := base
+		if base.Server == waTypes.DefaultUserServer {
+			target = lidMap[base].ToNonAD()
 		}
-		_, blocked := cfg.blacklist[j.ToNonAD()]
-		return blocked
-	}
-
-	filtered := make(map[waTypes.JID]waTypes.ContactInfo, len(all))
-	for jid, info := range all {
-		clean := jid.ToNonAD()
-		if isBlacklisted(clean) {
+		if target.IsEmpty() || target.Server != waTypes.HiddenUserServer {
 			continue
 		}
-		switch clean.Server {
-		case waTypes.DefaultUserServer:
-			filtered[clean] = info
-		case waTypes.HiddenUserServer:
-			// Resolve @lid contact to its @s.whatsapp.net PN so all recipients match ownID's PN domain,
-			// while still honoring Blacklist ("My Contacts Except...") on both the LID and resolved PN.
-			if s.lids != nil {
-				if pn, err := s.lids.GetPNForLID(ctx, clean); err == nil && !pn.IsEmpty() && pn.Server == waTypes.DefaultUserServer {
-					pnClean := pn.ToNonAD()
-					if isBlacklisted(pnClean) {
-						continue
-					}
-					if _, exists := filtered[pnClean]; !exists {
-						filtered[pnClean] = info
-					}
-				}
-			}
+		if _, blocked := blacklist[base]; blocked {
+			continue
+		}
+		if _, blocked := blacklist[target]; blocked {
+			continue
+		}
+		if _, dup := seen[target]; !dup {
+			seen[target] = struct{}{}
+			recipients = append(recipients, target)
 		}
 	}
-	return filtered, nil
+
+	// Always include own LID (required by WhatsApp so the status appears on your own phone).
+	ownClean := ownLID.ToNonAD()
+	if !ownClean.IsEmpty() && ownClean.Server == waTypes.HiddenUserServer {
+		if _, dup := seen[ownClean]; !dup {
+			recipients = append(recipients, ownClean)
+		}
+	}
+	return recipients, nil
 }
 
-// WrapDeviceForStatusBroadcast wraps device.Contacts once (before creating the
-// whatsmeow.Client) so status@broadcast sends never mix PN and LID recipients.
-func WrapDeviceForStatusBroadcast(device *store.Device) {
-	if device == nil || device.Contacts == nil {
-		return
+func filterLIDStatusDevices(devices []waTypes.JID) []waTypes.JID {
+	return slices.DeleteFunc(slices.Clone(devices), func(j waTypes.JID) bool {
+		return j.Server != waTypes.HiddenUserServer ||
+			j.Server == waTypes.HostedServer ||
+			j.Server == waTypes.HostedLIDServer
+	})
+}
+
+func statusParticipantListHashV2(participants []waTypes.JID) string {
+	strs := make([]string, len(participants))
+	for i, p := range participants {
+		strs[i] = p.ADString()
 	}
-	if _, already := device.Contacts.(*statusSafeContactStore); already {
-		return
+	sort.Strings(strs)
+	hash := sha256.Sum256([]byte(strings.Join(strs, "")))
+	return fmt.Sprintf("2:%s", base64.RawStdEncoding.EncodeToString(hash[:6]))
+}
+
+func padStatusPlaintext(plaintext []byte) []byte {
+	var b [1]byte
+	_, _ = rand.Read(b[:])
+	pad := b[0] & 0xf
+	if pad == 0 {
+		pad = 0xf
 	}
-	device.Contacts = &statusSafeContactStore{
-		ContactStore: device.Contacts,
-		lids:         device.LIDs,
+	return append(plaintext, bytes.Repeat([]byte{pad}, int(pad))...)
+}
+
+func statusMediaType(msg *waE2E.Message) string {
+	switch {
+	case msg.ImageMessage != nil:
+		return "image"
+	case msg.VideoMessage != nil:
+		if msg.VideoMessage.GetGifPlayback() {
+			return "gif"
+		}
+		return "video"
+	case msg.AudioMessage != nil:
+		if msg.AudioMessage.GetPTT() {
+			return "ptt"
+		}
+		return "audio"
+	case msg.ExtendedTextMessage != nil && msg.ExtendedTextMessage.Title != nil:
+		return "url"
+	default:
+		return ""
 	}
 }
 
-// SendStatusBroadcast sends a WhatsApp Status (Story) message to status@broadcast
-// using a PN-normalized contact context (preserving Blacklist privacy) to avoid
-// WhatsApp server error 400.
+// SendStatusBroadcast posts (or revokes) a WhatsApp Status (Story) to
+// status@broadcast routed strictly via @lid (fixing tulir/whatsmeow#1293 / PR #1294
+// across My Contacts, My Contacts Except..., and Only Share With...) and marks
+// statuses as reshareable (CanBeReshared=true).
 func SendStatusBroadcast(ctx context.Context, client *whatsmeow.Client, msg *waE2E.Message) (whatsmeow.SendResponse, error) {
-	statusCtx, whitelistHasLID := PrepareStatusContext(ctx, client)
-	resp, err := client.SendMessage(statusCtx, waTypes.StatusBroadcastJID, msg)
-	if err != nil && whitelistHasLID && strings.Contains(err.Error(), "400") {
-		return resp, fmt.Errorf("%w (WhatsApp returned @lid entries in 'Only Share With' whitelist; switch status privacy to 'My Contacts' or 'My Contacts Except...' until whatsmeow#1293 is merged upstream)", err)
+	if client == nil || client.Store == nil {
+		return whatsmeow.SendResponse{}, fmt.Errorf("client not initialized")
 	}
-	return resp, err
+	ApplyStatusReshareable(msg)
+
+	internals := client.DangerousInternals()
+	ownLID := internals.GetOwnLID()
+	if ownLID.IsEmpty() || ownLID.Server != waTypes.HiddenUserServer {
+		// Fallback for legacy non-LID accounts.
+		return client.SendMessage(ctx, waTypes.StatusBroadcastJID, msg)
+	}
+
+	// 1. Resolve status privacy + LID-only recipients (supports Contacts, Blacklist, and Whitelist).
+	privOpts, err := client.GetStatusPrivacy(ctx)
+	if err != nil {
+		return whatsmeow.SendResponse{}, fmt.Errorf("failed to get status privacy: %w", err)
+	}
+	priv := whatsmeow.DefaultStatusPrivacy[0]
+	if len(privOpts) > 0 {
+		priv = privOpts[0]
+	}
+
+	var allContacts map[waTypes.JID]waTypes.ContactInfo
+	if priv.Type != waTypes.StatusPrivacyTypeWhitelist && client.Store.Contacts != nil {
+		allContacts, err = client.Store.Contacts.GetAllContacts(ctx)
+		if err != nil {
+			return whatsmeow.SendResponse{}, fmt.Errorf("failed to read contacts: %w", err)
+		}
+	}
+
+	recipients, err := ResolveLIDStatusRecipients(ctx, ownLID, priv, allContacts, client.Store.LIDs)
+	if err != nil {
+		return whatsmeow.SendResponse{}, err
+	}
+	if len(recipients) == 0 {
+		return whatsmeow.SendResponse{}, fmt.Errorf("no eligible LID recipients found for status privacy=%s", priv.Type)
+	}
+
+	// 2. Ensure MessageSecret when reporting token is required.
+	if internals.ShouldIncludeReportingToken(msg) {
+		if msg.MessageContextInfo == nil {
+			msg.MessageContextInfo = &waE2E.MessageContextInfo{}
+		}
+		if len(msg.MessageContextInfo.MessageSecret) == 0 {
+			sec := make([]byte, 32)
+			_, _ = rand.Read(sec)
+			msg.MessageContextInfo.MessageSecret = sec
+		}
+	}
+
+	// 3. Marshal & encrypt payload using Signal SenderKey bound to ownLID.
+	to := waTypes.StatusBroadcastJID
+	msgID := client.GenerateMessageID()
+	plaintext, err := proto.Marshal(msg)
+	if err != nil {
+		return whatsmeow.SendResponse{}, fmt.Errorf("marshal status message: %w", err)
+	}
+
+	builder := groups.NewGroupSessionBuilder(client.Store, store.SignalProtobufSerializer)
+	senderKeyName := protocol.NewSenderKeyName(to.String(), ownLID.SignalAddress())
+	signalSKD, err := builder.Create(ctx, senderKeyName)
+	if err != nil {
+		return whatsmeow.SendResponse{}, fmt.Errorf("create sender key for status: %w", err)
+	}
+	skdPlaintext, err := proto.Marshal(&waE2E.Message{
+		SenderKeyDistributionMessage: &waE2E.SenderKeyDistributionMessage{
+			GroupID:                             proto.String(to.String()),
+			AxolotlSenderKeyDistributionMessage: signalSKD.Serialize(),
+		},
+	})
+	if err != nil {
+		return whatsmeow.SendResponse{}, fmt.Errorf("marshal SKDM for status: %w", err)
+	}
+
+	cipher := groups.NewGroupCipher(builder, senderKeyName, client.Store)
+	encrypted, err := cipher.Encrypt(ctx, padStatusPlaintext(plaintext))
+	if err != nil {
+		return whatsmeow.SendResponse{}, fmt.Errorf("encrypt status payload: %w", err)
+	}
+	ciphertext := encrypted.SignedSerialize()
+
+	// 4. Resolve recipient devices and drop any non-LID or Hosted devices.
+	rawDevices, err := client.GetUserDevices(ctx, recipients)
+	if err != nil {
+		return whatsmeow.SendResponse{}, fmt.Errorf("failed to get status recipient devices: %w", err)
+	}
+	allDevices := filterLIDStatusDevices(rawDevices)
+
+	encAttrs := waBinary.Attrs{}
+	msgType := "text"
+	mediaType := statusMediaType(msg)
+	if mediaType != "" {
+		msgType = "media"
+	}
+	attrs := waBinary.Attrs{
+		"id":   msgID,
+		"type": msgType,
+		"to":   to,
+	}
+	if msg.ProtocolMessage != nil && msg.ProtocolMessage.GetType() == waE2E.ProtocolMessage_REVOKE {
+		attrs["edit"] = string(waTypes.EditAttributeSenderRevoke)
+		encAttrs["decrypt-fail"] = string(events.DecryptFailHide)
+	}
+
+	participantNodes, includeIdentity, err := internals.EncryptMessageForDevices(ctx, allDevices, msgID, skdPlaintext, nil, encAttrs)
+	if err != nil {
+		return whatsmeow.SendResponse{}, fmt.Errorf("encrypt SKDM for status devices: %w", err)
+	}
+
+	phash := statusParticipantListHashV2(allDevices)
+	attrs["phash"] = phash
+
+	content := []waBinary.Node{{
+		Tag:     "participants",
+		Content: participantNodes,
+	}}
+	if includeIdentity {
+		content = append(content, internals.MakeDeviceIdentityNode())
+	}
+	skMsg := waBinary.Node{
+		Tag:     "enc",
+		Content: ciphertext,
+		Attrs:   waBinary.Attrs{"v": "2", "type": "skmsg"},
+	}
+	if mediaType != "" {
+		skMsg.Attrs["mediatype"] = mediaType
+	}
+	content = append(content, skMsg)
+	if internals.ShouldIncludeReportingToken(msg) && len(msg.GetMessageContextInfo().GetMessageSecret()) > 0 {
+		content = append(content, internals.GetMessageReportingToken(plaintext, msg, ownLID, to, msgID))
+	}
+
+	node := waBinary.Node{
+		Tag:     "message",
+		Attrs:   attrs,
+		Content: content,
+	}
+
+	_ = internals.AddRecentMessage(ctx, to, msgID, msg, nil)
+	respChan := internals.WaitResponse(msgID)
+	if _, err := internals.SendNodeAndGetData(ctx, node); err != nil {
+		internals.CancelResponse(msgID, respChan)
+		return whatsmeow.SendResponse{}, fmt.Errorf("send status node: %w", err)
+	}
+
+	var respNode *waBinary.Node
+	select {
+	case respNode = <-respChan:
+	case <-time.After(60 * time.Second):
+		internals.CancelResponse(msgID, respChan)
+		return whatsmeow.SendResponse{}, whatsmeow.ErrMessageTimedOut
+	case <-ctx.Done():
+		internals.CancelResponse(msgID, respChan)
+		return whatsmeow.SendResponse{}, ctx.Err()
+	}
+
+	ag := respNode.AttrGetter()
+	resp := whatsmeow.SendResponse{
+		ID:        msgID,
+		Timestamp: ag.UnixTime("t"),
+		ServerID:  waTypes.MessageServerID(ag.OptionalInt("server_id")),
+	}
+	if errCode := ag.Int("error"); errCode != 0 {
+		fmt.Printf("⚠️ [STATUS] server error %d (privacy=%s lidRecipients=%d devices=%d type=%s media=%s)\n",
+			errCode, priv.Type, len(recipients), len(allDevices), msgType, mediaType)
+		return resp, fmt.Errorf("%w %d", whatsmeow.ErrServerReturnedError, errCode)
+	}
+	fmt.Printf("✅ [STATUS] posted %s via LID (privacy=%s recipients=%d devices=%d reshareable=true)\n",
+		msgID, priv.Type, len(recipients), len(allDevices))
+	return resp, nil
 }
 
 // EnsureWhatsAppStatusMP4 converts non-MP4 video files (e.g. .mov, .mkv, .webm)
