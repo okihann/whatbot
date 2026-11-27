@@ -10,6 +10,7 @@ import (
 
 	"bot/config"
 	"bot/handlers"
+	"bot/i18n"
 	"bot/session"
 	"bot/types"
 	"bot/utils"
@@ -43,7 +44,7 @@ func init() {
 
 func executeMenu(client *whatsmeow.Client, msg *events.Message, args []string) {
 	conf, _ := config.LoadConfig()
-	prefix := "/"
+	prefix := "."
 	botName := "Whatbot"
 	if conf != nil {
 		if conf.Settings.Prefix != "" {
@@ -54,7 +55,7 @@ func executeMenu(client *whatsmeow.Client, msg *events.Message, args []string) {
 		}
 	}
 
-	isOwner := utils.IsOwner(client, msg, conf)
+	isOwner := handlers.IsBotOrTenantOwner(client, msg, conf)
 	cats := menuCategories(isOwner)
 	if len(cats) == 0 {
 		utils.SendReply(client, msg.Info.Chat, "No commands registered yet.")
@@ -63,6 +64,10 @@ func executeMenu(client *whatsmeow.Client, msg *events.Message, args []string) {
 
 	query := strings.ToLower(strings.TrimSpace(strings.Join(args, " ")))
 	query = strings.TrimPrefix(query, prefix)
+	query = strings.TrimPrefix(query, ".")
+	query = strings.TrimPrefix(query, "/")
+
+	lang := i18n.ResolveLang(client, msg)
 
 	if query != "" {
 		if query == "all" {
@@ -76,25 +81,23 @@ func executeMenu(client *whatsmeow.Client, msg *events.Message, args []string) {
 		}
 		// Match a specific command name.
 		if cmd, ok := handlers.Commands[query]; ok {
-			if cmd.Category == "owner" && !isOwner {
-				utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("⚠️ Category or command `%s` not found.", query))
+			if (cmd.Category == "owner" || cmd.OwnerOnly) && !isOwner {
+				utils.SendReply(client, msg.Info.Chat, i18n.T(lang, "menu.not_found", query, prefix))
 				return
 			}
 			utils.SendReply(client, msg.Info.Chat, renderCommandDetail(prefix, cmd))
 			return
 		}
-		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("⚠️ Unknown category or command `%s`.\nUse `%shelp` to view all categories or `%shelp all` to list all commands.", query, prefix, prefix))
+		utils.SendReply(client, msg.Info.Chat, i18n.T(lang, "menu.not_found", query, prefix))
 		return
 	}
 
-	// Main interactive menu (rendered as clean formatted text so it works
-	// identically on Android, iOS, Desktop, and Web).
 	userName := strings.TrimSpace(msg.Info.PushName)
 	if userName == "" {
 		userName = "there"
 	}
 
-	text := renderMainMenu(botName, prefix, userName, cats)
+	text := renderMainMenuLang(lang, botName, prefix, userName, cats)
 	resp, err := utils.SendReply(client, msg.Info.Chat, text)
 	if err != nil {
 		return
@@ -182,6 +185,10 @@ func handleMenuInteraction(client *whatsmeow.Client, msg *events.Message) bool {
 }
 
 func renderMainMenu(botName, prefix, userName string, cats []string) string {
+	return renderMainMenuLang(i18n.LangEN, botName, prefix, userName, cats)
+}
+
+func renderMainMenuLang(lang, botName, prefix, userName string, cats []string) string {
 	loc, err := time.LoadLocation("Asia/Jakarta")
 	if err != nil {
 		loc = time.UTC
@@ -204,20 +211,20 @@ func renderMainMenu(botName, prefix, userName string, cats []string) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "╭─〔 *%s* 〕\n", botName)
-	fmt.Fprintf(&b, "│ User: %s\n", userName)
-	fmt.Fprintf(&b, "│ Runtime: %s\n", uptime)
-	fmt.Fprintf(&b, "│ Prefix: `%s` or `.` / `/`\n", prefix)
-	fmt.Fprintf(&b, "│ Total Cmd: %d\n", totalCmds)
+	fmt.Fprintf(&b, "│ %s: %s\n", i18n.T(lang, "menu.user"), userName)
+	fmt.Fprintf(&b, "│ %s: %s\n", i18n.T(lang, "menu.runtime"), uptime)
+	fmt.Fprintf(&b, "│ %s: `%s` (. /)\n", i18n.T(lang, "menu.prefix"), prefix)
+	fmt.Fprintf(&b, "│ %s: %d\n", i18n.T(lang, "menu.total_cmd"), totalCmds)
 	fmt.Fprintf(&b, "│ Platform: %s • %s\n", runtime.GOOS, now.Format("02/01 15:04"))
 	b.WriteString("╰──────────\n\n")
 
-	b.WriteString("╭─〔 *CATEGORIES* 〕\n")
+	fmt.Fprintf(&b, "╭─〔 *%s* 〕\n", i18n.T(lang, "menu.categories"))
 	for i, c := range cats {
 		fmt.Fprintf(&b, "│ *%d.* %s %s (%d)\n", i+1, categoryEmoji(c), formatCategoryTitle(c), catCounts[c])
 	}
-	b.WriteString("│ *0.* 📜 Show All Commands\n")
+	fmt.Fprintf(&b, "│ *0.* 📜 %s\n", i18n.T(lang, "menu.show_all"))
 	b.WriteString("╰──────────\n\n")
-	fmt.Fprintf(&b, "Reply with *1-%d* or *0*, or run `%smenu <category>`, `%smenu <cmd>`, or `%smenu all`.", len(cats), prefix, prefix, prefix)
+	b.WriteString(i18n.T(lang, "menu.footer", len(cats), prefix, prefix, prefix))
 
 	return b.String()
 }
@@ -319,6 +326,7 @@ func matchCategory(cats []string, query string) (string, bool) {
 func menuCategories(includeOwner bool) []string {
 	preferred := []string{
 		"general", "main", "profile", "bot",
+		"rpg", "confess",
 		"group_admin", "group_security",
 		"downloader", "youtube", "music",
 		"sticker", "media", "audiofx",
@@ -383,6 +391,10 @@ func categoryEmoji(category string) string {
 		return "📋"
 	case "profile":
 		return "👤"
+	case "rpg":
+		return "⚔️"
+	case "confess":
+		return "💌"
 	case "group_admin":
 		return "🛡️"
 	case "group_security":

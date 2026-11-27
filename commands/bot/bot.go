@@ -13,6 +13,7 @@ import (
 	"bot/config"
 	db "bot/databases"
 	"bot/handlers"
+	"bot/i18n"
 	"bot/pairing"
 	"bot/types"
 	"bot/utils"
@@ -30,7 +31,8 @@ func init() {
 	handlers.RegisterCallHandler(handleIncomingCall)
 
 	cmds := []types.Command{
-		{Name: "jadibot", Aliases: []string{"scanbot"}, Category: "bot", Description: "Queue a sequential Android Companion QR pairing slot for selling/linking a bot.", Usage: ".jadibot [label] [days]", Execute: cmdJadiBot},
+		{Name: "jadibot", Aliases: []string{"scanbot"}, Category: "bot", OwnerOnly: true, Description: "🔒 [Owner-Only] Queue a sequential Android Companion QR pairing slot for selling/linking a bot.", Usage: ".jadibot [label] [days]", Execute: cmdJadiBot},
+		{Name: "lockjadibot", Category: "bot", OwnerOnly: true, Description: "Lock or unlock .jadibot (locked by default). Usage: .lockjadibot on|off", Execute: cmdLockJadiBot},
 		{Name: "trackbot", Category: "bot", OwnerOnly: true, Description: "List all active linked bot tenants and sequential QR queue status.", Execute: cmdTrackBot},
 		{Name: "bot", Aliases: []string{"botinfo", "botofficial"}, Category: "bot", Description: "Show bot runtime, Android Companion status, and SQLite WAL diagnostics.", Execute: cmdBotInfo},
 		{Name: "botsettings", Category: "bot", OwnerOnly: true, Description: "Show current per-bot tenant settings.", Execute: cmdBotSettings},
@@ -98,7 +100,36 @@ func handleIncomingCall(client *whatsmeow.Client, evt *events.CallOffer) {
 	}
 }
 
+func cmdLockJadiBot(client *whatsmeow.Client, msg *events.Message, args []string) {
+	store, t := tenantForClient(client)
+	if store == nil || t == nil {
+		utils.SendReply(client, msg.Info.Chat, "⚠️ BotStore unavailable.")
+		return
+	}
+	arg := strings.ToLower(strings.TrimSpace(strings.Join(args, " ")))
+	switch arg {
+	case "on", "lock", "1", "true":
+		t.JadiBotLocked = true
+	case "off", "unlock", "0", "false":
+		t.JadiBotLocked = false
+	default:
+		t.JadiBotLocked = !t.JadiBotLocked
+	}
+	_ = store.SaveTenant(t)
+	if t.JadiBotLocked {
+		utils.SendReply(client, msg.Info.Chat, "🔒 `.jadibot` is now *LOCKED* (owner-only).")
+	} else {
+		utils.SendReply(client, msg.Info.Chat, "🔓 `.jadibot` lock flag set to *UNLOCKED* (still owner-restricted unless opened).")
+	}
+}
+
 func cmdJadiBot(client *whatsmeow.Client, msg *events.Message, args []string) {
+	conf, _ := config.LoadConfig()
+	if !handlers.IsBotOrTenantOwner(client, msg, conf) {
+		utils.SendReply(client, msg.Info.Chat, i18n.TMsg(client, msg, "err.jadibot_locked"))
+		return
+	}
+
 	q := pairing.DefaultQueue()
 	if q == nil {
 		utils.SendReply(client, msg.Info.Chat, "⚠️ Sequential QR pairing queue is not initialized.")
@@ -124,6 +155,7 @@ func cmdJadiBot(client *whatsmeow.Client, msg *events.Message, args []string) {
 	buyerPhone := utils.ResolvePhoneNumber(client, msg.Info.Sender, msg.Info.SenderAlt)
 	chatJID := msg.Info.Chat
 
+	var pairToken string
 	ticket, err := q.Enqueue(pairing.EnqueueRequest{
 		Label:        label,
 		BuyerJID:     buyerPhone,
@@ -133,7 +165,7 @@ func cmdJadiBot(client *whatsmeow.Client, msg *events.Message, args []string) {
 			if encErr != nil {
 				return
 			}
-			caption := fmt.Sprintf("📱 *Sequential QR Pairing (%s)*\nScan with WhatsApp → Linked Devices within 90s.\nWeb link: %s/pair/%s", label, publicBaseURL(), "")
+			caption := fmt.Sprintf("📱 *Sequential QR Pairing (%s)*\nScan with WhatsApp → Linked Devices within 90s.\nWeb link: %s/pair/%s", label, publicBaseURL(), pairToken)
 			_, _ = utils.SendImageData(context.Background(), client, chatJID, encoded.PNG(), "image/png", caption)
 		},
 		OnDone: func(t pairing.Ticket) {
@@ -151,11 +183,12 @@ func cmdJadiBot(client *whatsmeow.Client, msg *events.Message, args []string) {
 		utils.SendReply(client, chatJID, "❌ Failed to queue pairing slot: "+err.Error())
 		return
 	}
+	pairToken = ticket.Token
 
 	pairURL := fmt.Sprintf("%s/pair/%s", publicBaseURL(), ticket.Token)
-	posText := "You are *#1* — generating QR right now!"
+	posText := "Slot *#1* — generating QR right now!"
 	if ticket.Position > 0 {
-		posText = fmt.Sprintf("You are *#%d in queue* — your QR will be generated automatically once the previous buyer finishes.", ticket.Position+1)
+		posText = fmt.Sprintf("Slot *#%d in queue* — QR will be generated automatically once the previous buyer finishes.", ticket.Position+1)
 	}
 	utils.SendReply(client, chatJID, fmt.Sprintf(
 		"🎟️ *Sequential QR Pairing Queued*\n• *Label:* %s\n• *Status:* %s\n• *Buyer Pairing Page:* %s\n• *Ticket:* `%s`",

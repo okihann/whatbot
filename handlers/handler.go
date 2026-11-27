@@ -3,6 +3,7 @@ package handlers
 import (
 	"bot/config"
 	db "bot/databases"
+	"bot/i18n"
 	"bot/types"
 	"bot/utils"
 	"context"
@@ -326,13 +327,17 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 
 	// Owner check
 	if (cmd.Category == "owner" || cmd.OwnerOnly) && !isOwner {
-		utils.SendReply(client, jid, "⛔ Access Denied: This command is restricted to the bot owner.")
+		if cmd.Name == "jadibot" {
+			utils.SendReply(client, jid, i18n.TMsg(client, msg, "err.jadibot_locked"))
+		} else {
+			utils.SendReply(client, jid, i18n.TMsg(client, msg, "err.owner_only"))
+		}
 		return
 	}
 
 	// Group-only check
 	if cmd.GroupOnly && !msg.Info.IsGroup {
-		utils.SendReply(client, jid, "👥 This command can only be used inside a group.")
+		utils.SendReply(client, jid, i18n.TMsg(client, msg, "err.group_only"))
 		return
 	}
 
@@ -397,13 +402,13 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 				}
 			}
 			if cmd.AdminOnly && !senderAdmin {
-				utils.SendReply(client, jid, "🛡️ Group Admin required for this command.")
+				utils.SendReply(client, jid, i18n.TMsg(client, msg, "err.admin_only"))
 				return
 			}
 		}
 
 		if cmd.BotAdmin && !botAdmin {
-			utils.SendReply(client, jid, "⚠️ Please make the bot a Group Admin first.")
+			utils.SendReply(client, jid, i18n.TMsg(client, msg, "err.bot_admin"))
 			return
 		}
 
@@ -413,13 +418,13 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 				allowed = true
 			}
 			if !allowed {
-				utils.SendReply(client, jid, "🔞 NSFW is disabled in this group. An admin can enable it with `.nsfw on`.")
+				utils.SendReply(client, jid, i18n.TMsg(client, msg, "err.nsfw_group_off"))
 				return
 			}
 		}
 	} else if cmd.NSFW && !isOwner {
 		if tenant == nil || !tenant.NSFWEnabled {
-			utils.SendReply(client, jid, "🔞 NSFW is disabled on this bot. Owner can enable it with `.nsfw on`.")
+			utils.SendReply(client, jid, i18n.TMsg(client, msg, "err.nsfw_bot_off"))
 			return
 		}
 	}

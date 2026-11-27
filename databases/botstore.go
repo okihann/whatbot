@@ -19,20 +19,21 @@ func boolInt(b bool) int {
 // BotTenant holds per-linked-account settings & optional subscription expiry
 // for multi-tenant ("sell the bot") deployments.
 type BotTenant struct {
-	AccountID   string `json:"accountId"`
-	OwnerJID    string `json:"ownerJid"`
-	BotName     string `json:"botName"`
-	Prefix      string `json:"prefix"`
-	SelfMode    bool   `json:"selfMode"`
-	GroupMode   bool   `json:"groupMode"`
-	AutoRead    bool   `json:"autoRead"`
-	RejectCall  bool   `json:"rejectCall"`
-	AnswerCall  string `json:"answerCall"`
-	NSFWEnabled bool   `json:"nsfwEnabled"`
-	PacingMS    int    `json:"pacingMs"`
-	ExpiresAt   int64  `json:"expiresAt"` // 0 = never expires
-	CreatedAt   int64  `json:"createdAt"`
-	Notes       string `json:"notes"`
+	AccountID     string `json:"accountId"`
+	OwnerJID      string `json:"ownerJid"`
+	BotName       string `json:"botName"`
+	Prefix        string `json:"prefix"`
+	SelfMode      bool   `json:"selfMode"`
+	GroupMode     bool   `json:"groupMode"`
+	AutoRead      bool   `json:"autoRead"`
+	RejectCall    bool   `json:"rejectCall"`
+	AnswerCall    string `json:"answerCall"`
+	NSFWEnabled   bool   `json:"nsfwEnabled"`
+	JadiBotLocked bool   `json:"jadibotLocked"`
+	PacingMS      int    `json:"pacingMs"`
+	ExpiresAt     int64  `json:"expiresAt"` // 0 = never expires
+	CreatedAt     int64  `json:"createdAt"`
+	Notes         string `json:"notes"`
 }
 
 // PairingTicketRecord persists a sequential QR pairing queue ticket.
@@ -50,22 +51,24 @@ type PairingTicketRecord struct {
 
 // UserProfile stores persistent profile, economy, AFK, and XP state per user.
 type UserProfile struct {
-	JID          string `json:"jid"`
-	Name         string `json:"name"`
-	Age          int    `json:"age"`
-	Gender       string `json:"gender"`
-	Bio          string `json:"bio"`
-	CustomPrefix string `json:"customPrefix"`
-	XP           int64  `json:"xp"`
-	Level        int    `json:"level"`
-	Balance      int64  `json:"balance"`
-	DailyLast    int64  `json:"dailyLast"`
-	AFKReason    string `json:"afkReason"`
-	AFKSince     int64  `json:"afkSince"`
-	PremiumUntil int64  `json:"premiumUntil"`
-	Banned       bool   `json:"banned"`
-	MsgCount     int64  `json:"msgCount"`
-	UpdatedAt    int64  `json:"updatedAt"`
+	JID           string `json:"jid"`
+	Name          string `json:"name"`
+	Age           int    `json:"age"`
+	Gender        string `json:"gender"`
+	Bio           string `json:"bio"`
+	CustomPrefix  string `json:"customPrefix"`
+	Lang          string `json:"lang"`
+	ConfessOptOut bool   `json:"confessOptOut"`
+	XP            int64  `json:"xp"`
+	Level         int    `json:"level"`
+	Balance       int64  `json:"balance"`
+	DailyLast     int64  `json:"dailyLast"`
+	AFKReason     string `json:"afkReason"`
+	AFKSince      int64  `json:"afkSince"`
+	PremiumUntil  int64  `json:"premiumUntil"`
+	Banned        bool   `json:"banned"`
+	MsgCount      int64  `json:"msgCount"`
+	UpdatedAt     int64  `json:"updatedAt"`
 }
 
 // BalanceEntry records a user's balance transaction for .BalanceHistory.
@@ -303,6 +306,10 @@ func OpenBotStore(dbPath string) (*BotStore, error) {
 		conn.Close()
 		return nil, fmt.Errorf("init botstore schema: %w", err)
 	}
+	if err := initExtraSchema(conn); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("init botstore extra schema: %w", err)
+	}
 
 	return &BotStore{db: conn}, nil
 }
@@ -333,12 +340,12 @@ func (s *BotStore) GetTenant(accountID string) (*BotTenant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	row := s.db.QueryRow(`SELECT account_id, owner_jid, bot_name, prefix, self_mode, group_mode, auto_read, reject_call, answer_call, nsfw_enabled, pacing_ms, expires_at, created_at, notes FROM bot_tenants WHERE account_id = ?`, accountID)
+	row := s.db.QueryRow(`SELECT account_id, owner_jid, bot_name, prefix, self_mode, group_mode, auto_read, reject_call, answer_call, nsfw_enabled, jadibot_locked, pacing_ms, expires_at, created_at, notes FROM bot_tenants WHERE account_id = ?`, accountID)
 	var t BotTenant
-	var sm, gm, ar, rc, nsfw int
-	err := row.Scan(&t.AccountID, &t.OwnerJID, &t.BotName, &t.Prefix, &sm, &gm, &ar, &rc, &t.AnswerCall, &nsfw, &t.PacingMS, &t.ExpiresAt, &t.CreatedAt, &t.Notes)
+	var sm, gm, ar, rc, nsfw, jbLock int
+	err := row.Scan(&t.AccountID, &t.OwnerJID, &t.BotName, &t.Prefix, &sm, &gm, &ar, &rc, &t.AnswerCall, &nsfw, &jbLock, &t.PacingMS, &t.ExpiresAt, &t.CreatedAt, &t.Notes)
 	if err == sql.ErrNoRows {
-		return &BotTenant{AccountID: accountID, BotName: "Whatbot", CreatedAt: time.Now().Unix()}, nil
+		return &BotTenant{AccountID: accountID, BotName: "Whatbot", JadiBotLocked: true, CreatedAt: time.Now().Unix()}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -348,6 +355,7 @@ func (s *BotStore) GetTenant(accountID string) (*BotTenant, error) {
 	t.AutoRead = ar != 0
 	t.RejectCall = rc != 0
 	t.NSFWEnabled = nsfw != 0
+	t.JadiBotLocked = jbLock != 0
 	return &t, nil
 }
 
@@ -362,8 +370,8 @@ func (s *BotStore) SaveTenant(t *BotTenant) error {
 		t.CreatedAt = time.Now().Unix()
 	}
 	_, err := s.db.Exec(`
-		INSERT INTO bot_tenants (account_id, owner_jid, bot_name, prefix, self_mode, group_mode, auto_read, reject_call, answer_call, nsfw_enabled, pacing_ms, expires_at, created_at, notes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO bot_tenants (account_id, owner_jid, bot_name, prefix, self_mode, group_mode, auto_read, reject_call, answer_call, nsfw_enabled, jadibot_locked, pacing_ms, expires_at, created_at, notes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(account_id) DO UPDATE SET
 			owner_jid = excluded.owner_jid,
 			bot_name = excluded.bot_name,
@@ -374,11 +382,12 @@ func (s *BotStore) SaveTenant(t *BotTenant) error {
 			reject_call = excluded.reject_call,
 			answer_call = excluded.answer_call,
 			nsfw_enabled = excluded.nsfw_enabled,
+			jadibot_locked = excluded.jadibot_locked,
 			pacing_ms = excluded.pacing_ms,
 			expires_at = excluded.expires_at,
 			notes = excluded.notes
 	`, t.AccountID, t.OwnerJID, t.BotName, t.Prefix, boolInt(t.SelfMode), boolInt(t.GroupMode),
-		boolInt(t.AutoRead), boolInt(t.RejectCall), t.AnswerCall, boolInt(t.NSFWEnabled),
+		boolInt(t.AutoRead), boolInt(t.RejectCall), t.AnswerCall, boolInt(t.NSFWEnabled), boolInt(t.JadiBotLocked),
 		t.PacingMS, t.ExpiresAt, t.CreatedAt, t.Notes)
 	return err
 }
@@ -390,7 +399,7 @@ func (s *BotStore) ListTenants() ([]BotTenant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rows, err := s.db.Query(`SELECT account_id, owner_jid, bot_name, prefix, self_mode, group_mode, auto_read, reject_call, answer_call, nsfw_enabled, pacing_ms, expires_at, created_at, notes FROM bot_tenants ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT account_id, owner_jid, bot_name, prefix, self_mode, group_mode, auto_read, reject_call, answer_call, nsfw_enabled, jadibot_locked, pacing_ms, expires_at, created_at, notes FROM bot_tenants ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -399,8 +408,8 @@ func (s *BotStore) ListTenants() ([]BotTenant, error) {
 	var out []BotTenant
 	for rows.Next() {
 		var t BotTenant
-		var sm, gm, ar, rc, nsfw int
-		if err := rows.Scan(&t.AccountID, &t.OwnerJID, &t.BotName, &t.Prefix, &sm, &gm, &ar, &rc, &t.AnswerCall, &nsfw, &t.PacingMS, &t.ExpiresAt, &t.CreatedAt, &t.Notes); err != nil {
+		var sm, gm, ar, rc, nsfw, jbLock int
+		if err := rows.Scan(&t.AccountID, &t.OwnerJID, &t.BotName, &t.Prefix, &sm, &gm, &ar, &rc, &t.AnswerCall, &nsfw, &jbLock, &t.PacingMS, &t.ExpiresAt, &t.CreatedAt, &t.Notes); err != nil {
 			continue
 		}
 		t.SelfMode = sm != 0
@@ -408,6 +417,7 @@ func (s *BotStore) ListTenants() ([]BotTenant, error) {
 		t.AutoRead = ar != 0
 		t.RejectCall = rc != 0
 		t.NSFWEnabled = nsfw != 0
+		t.JadiBotLocked = jbLock != 0
 		out = append(out, t)
 	}
 	return out, nil
@@ -476,10 +486,10 @@ func (s *BotStore) GetUser(jid string) (*UserProfile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	row := s.db.QueryRow(`SELECT jid, name, age, gender, bio, custom_prefix, xp, level, balance, daily_last, afk_reason, afk_since, premium_until, banned, msg_count, updated_at FROM users WHERE jid = ?`, jid)
+	row := s.db.QueryRow(`SELECT jid, name, age, gender, bio, custom_prefix, lang, confess_opt_out, xp, level, balance, daily_last, afk_reason, afk_since, premium_until, banned, msg_count, updated_at FROM users WHERE jid = ?`, jid)
 	var u UserProfile
-	var banned int
-	err := row.Scan(&u.JID, &u.Name, &u.Age, &u.Gender, &u.Bio, &u.CustomPrefix, &u.XP, &u.Level, &u.Balance, &u.DailyLast, &u.AFKReason, &u.AFKSince, &u.PremiumUntil, &banned, &u.MsgCount, &u.UpdatedAt)
+	var banned, optOut int
+	err := row.Scan(&u.JID, &u.Name, &u.Age, &u.Gender, &u.Bio, &u.CustomPrefix, &u.Lang, &optOut, &u.XP, &u.Level, &u.Balance, &u.DailyLast, &u.AFKReason, &u.AFKSince, &u.PremiumUntil, &banned, &u.MsgCount, &u.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return &UserProfile{JID: jid, Level: 1, Balance: 100}, nil
 	}
@@ -487,6 +497,7 @@ func (s *BotStore) GetUser(jid string) (*UserProfile, error) {
 		return nil, err
 	}
 	u.Banned = banned != 0
+	u.ConfessOptOut = optOut != 0
 	return &u, nil
 }
 
@@ -501,14 +512,16 @@ func (s *BotStore) SaveUser(u *UserProfile) error {
 		u.Level = 1
 	}
 	_, err := s.db.Exec(`
-		INSERT INTO users (jid, name, age, gender, bio, custom_prefix, xp, level, balance, daily_last, afk_reason, afk_since, premium_until, banned, msg_count, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO users (jid, name, age, gender, bio, custom_prefix, lang, confess_opt_out, xp, level, balance, daily_last, afk_reason, afk_since, premium_until, banned, msg_count, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(jid) DO UPDATE SET
 			name = excluded.name,
 			age = excluded.age,
 			gender = excluded.gender,
 			bio = excluded.bio,
 			custom_prefix = excluded.custom_prefix,
+			lang = excluded.lang,
+			confess_opt_out = excluded.confess_opt_out,
 			xp = excluded.xp,
 			level = excluded.level,
 			balance = excluded.balance,
@@ -519,7 +532,7 @@ func (s *BotStore) SaveUser(u *UserProfile) error {
 			banned = excluded.banned,
 			msg_count = excluded.msg_count,
 			updated_at = excluded.updated_at
-	`, u.JID, u.Name, u.Age, u.Gender, u.Bio, u.CustomPrefix, u.XP, u.Level, u.Balance, u.DailyLast, u.AFKReason, u.AFKSince, u.PremiumUntil, boolInt(u.Banned), u.MsgCount, u.UpdatedAt)
+	`, u.JID, u.Name, u.Age, u.Gender, u.Bio, u.CustomPrefix, u.Lang, boolInt(u.ConfessOptOut), u.XP, u.Level, u.Balance, u.DailyLast, u.AFKReason, u.AFKSince, u.PremiumUntil, boolInt(u.Banned), u.MsgCount, u.UpdatedAt)
 	return err
 }
 

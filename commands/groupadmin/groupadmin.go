@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"bot/config"
 	db "bot/databases"
 	"bot/handlers"
+	"bot/i18n"
 	"bot/types"
 	"bot/utils"
 
@@ -70,7 +72,7 @@ func init() {
 		{Name: "adzan", Category: "group_admin", GroupOnly: true, AdminOnly: true, Description: "Toggle prayer time reminder city. Usage: .adzan <city|off>", Execute: cmdAdzan},
 		{Name: "settimezone", Category: "group_admin", GroupOnly: true, AdminOnly: true, Description: "Set group timezone (e.g. Asia/Jakarta, Asia/Makassar, Asia/Jayapura).", Execute: cmdSetTimezone},
 		{Name: "listtimezone", Category: "group_admin", Description: "Show supported common timezones.", Execute: cmdListTimezone},
-		{Name: "setlang", Category: "group_admin", GroupOnly: true, AdminOnly: true, Description: "Set group language preference (id/en).", Execute: cmdSetLang},
+		{Name: "setlang", Aliases: []string{"bahasa"}, Category: "general", Description: "Set Indonesian (id) or English (en) language for yourself or this group. Usage: .setlang <id|en> [group]", Execute: cmdSetLang},
 		{Name: "debugpriority", Category: "group_admin", GroupOnly: true, AdminOnly: true, Description: "Inspect active prefixes and middleware status for this group.", Execute: cmdDebugPriority},
 
 		// Attendance & activity
@@ -749,16 +751,54 @@ func cmdListTimezone(client *whatsmeow.Client, msg *events.Message, args []strin
 }
 
 func cmdSetLang(client *whatsmeow.Client, msg *events.Message, args []string) {
-	lang := strings.ToLower(strings.TrimSpace(strings.Join(args, " ")))
-	if lang != "id" && lang != "en" {
-		utils.SendReply(client, msg.Info.Chat, "Usage: `.setlang <id|en>`")
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(strings.Join(args, " "))))
+	if len(fields) == 0 || (fields[0] != "id" && fields[0] != "en") {
+		utils.SendReply(client, msg.Info.Chat, i18n.TMsg(client, msg, "lang.usage"))
 		return
 	}
+	lang := fields[0]
+	label := "Bahasa Indonesia (id)"
+	if lang == "en" {
+		label = "English (en)"
+	}
 	store := db.GetBotStore()
-	cfg, _ := store.GetGroupConfig(msg.Info.Chat.ToNonAD().String())
-	cfg.Lang = lang
-	_ = store.SaveGroupConfig(cfg)
-	utils.SendReply(client, msg.Info.Chat, "✅ Group language set to `"+lang+"`.")
+	if store == nil {
+		return
+	}
+
+	if msg.Info.IsGroup && len(fields) >= 2 && (fields[1] == "group" || fields[1] == "grup") {
+		conf, _ := config.LoadConfig()
+		isAdmin, _ := handlers.IsGroupAdmin(client, msg.Info.Chat, msg.Info.Sender)
+		if !isAdmin && !handlers.IsBotOrTenantOwner(client, msg, conf) {
+			utils.SendReply(client, msg.Info.Chat, i18n.T(lang, "err.admin_only"))
+			return
+		}
+		cfg, _ := store.GetGroupConfig(msg.Info.Chat.ToNonAD().String())
+		cfg.Lang = lang
+		_ = store.SaveGroupConfig(cfg)
+		utils.SendReply(client, msg.Info.Chat, i18n.T(lang, "lang.set_group", label))
+		return
+	}
+
+	// Default: update caller's personal language preference (and group language if admin in group)
+	uid := utils.ResolvePhoneNumber(client, msg.Info.Sender, msg.Info.SenderAlt)
+	if uid != "" {
+		u, _ := store.GetUser(uid)
+		u.Lang = lang
+		_ = store.SaveUser(u)
+	}
+	if msg.Info.IsGroup {
+		conf, _ := config.LoadConfig()
+		isAdmin, _ := handlers.IsGroupAdmin(client, msg.Info.Chat, msg.Info.Sender)
+		if isAdmin || handlers.IsBotOrTenantOwner(client, msg, conf) {
+			cfg, _ := store.GetGroupConfig(msg.Info.Chat.ToNonAD().String())
+			cfg.Lang = lang
+			_ = store.SaveGroupConfig(cfg)
+			utils.SendReply(client, msg.Info.Chat, i18n.T(lang, "lang.set_group", label))
+			return
+		}
+	}
+	utils.SendReply(client, msg.Info.Chat, i18n.T(lang, "lang.set_user", label))
 }
 
 func cmdDebugPriority(client *whatsmeow.Client, msg *events.Message, args []string) {
