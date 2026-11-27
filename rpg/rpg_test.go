@@ -126,6 +126,7 @@ func TestRPGWorldMapGachaPetsAndWorldBoss(t *testing.T) {
 	}
 
 	// 3. Companion Pet combat & stat points bonus
+	p.EquippedPet = ""
 	baseAtk, baseDef := HeroAttackDefense(p)
 	p.Pets = append(p.Pets, PetCatalog["mini_dragon"])
 	p.EquippedPet = "mini_dragon"

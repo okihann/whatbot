@@ -14,6 +14,7 @@ import (
 	"bot/handlers"
 	"bot/types"
 	"bot/utils"
+	"bot/web"
 
 	"go.mau.fi/whatsmeow"
 	waTypes "go.mau.fi/whatsmeow/types"
@@ -538,8 +539,25 @@ func cmdWebLogin(client *whatsmeow.Client, msg *events.Message, args []string) {
 		}
 	}
 	uid := userKey(client, msg)
+	conf, _ := config.LoadConfig()
+	if handlers.IsBotOrTenantOwner(client, msg, conf) {
+		code, _, err := web.GenerateOwnerLoginCodeForWhatsApp()
+		if err == nil && code != "" {
+			secretMsg := fmt.Sprintf(
+				"🔐 *NopeBot Owner Web Login*\n\n• WhatsApp Web UI: %s\n• Verification Code: *%s* _(expires in 5 min)_\n• Arcade MiniGames: %s/games?user=%s",
+				base, code, base, uid,
+			)
+			if msg.Info.IsGroup {
+				_, _ = utils.SendReply(client, msg.Info.Sender.ToNonAD(), secretMsg)
+				utils.SendReply(client, msg.Info.Chat, "🔐 Sent your private Owner Web Login code to your DM.")
+				return
+			}
+			utils.SendReply(client, msg.Info.Chat, secretMsg)
+			return
+		}
+	}
 	utils.SendReply(client, msg.Info.Chat, fmt.Sprintf(
-		"🌐 *NopeBot Web Links*\n• WhatsApp Web UI: %s\n• Arcade MiniGames: %s/games?user=%s",
-		base, base, uid,
+		"🕹️ *NopeBot Arcade MiniGames*\n• %s/games?user=%s",
+		base, uid,
 	))
 }

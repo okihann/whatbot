@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -40,7 +41,35 @@ func (m *mockAccountManager) RemoveAccount(accountID string) error {
 	return nil
 }
 
-func TestWebServerEndpointsAndAuth(t *testing.T) {
+func newVerifiedOwnerClient(t *testing.T, srvURL string, hub *Hub, password string) *http.Client {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar: %v", err)
+	}
+	cli := &http.Client{Jar: jar}
+
+	code, _, err := hub.IssueOwnerLoginCode(true)
+	if err != nil {
+		t.Fatalf("IssueOwnerLoginCode: %v", err)
+	}
+
+	payload, _ := json.Marshal(map[string]string{
+		"password": password,
+		"code":     code,
+	})
+	resp, err := cli.Post(srvURL+"/api/wa/auth/verify", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("POST /api/wa/auth/verify: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on owner verify, got %d", resp.StatusCode)
+	}
+	return cli
+}
+
+func TestWebServerEndpointsOwnerAuthContactsAndChannelFilter(t *testing.T) {
 	dir := t.TempDir()
 	sessionDB, err := db.OpenSequentialSQLite(filepath.Join(dir, "session.db"))
 	if err != nil {
@@ -63,14 +92,40 @@ func TestWebServerEndpointsAndAuth(t *testing.T) {
 		MsgID:      "VO-1",
 		ChatJID:    "628222@s.whatsapp.net",
 		SenderJID:  "628222@s.whatsapp.net",
-		SenderName: "Bob",
+		SenderName: "628222",
 		MsgType:    "image",
 		Caption:    "secret photo",
 		IsViewOnce: true,
 		MediaMime:  "image/jpeg",
 		MediaPath:  mediaRel,
 		Timestamp:  1700000100,
-		ChatName:   "Bob",
+		ChatName:   "628222",
+	})
+	// Channels (@newsletter) and Status broadcasts must NEVER enter chats
+	chatStore.RecordMessage(db.StoredMessage{
+		AccountID: "628111",
+		MsgID:     "CHAN-1",
+		ChatJID:   "120363999@newsletter",
+		MsgType:   "text",
+		Body:      "Channel announcement",
+		Timestamp: 1700000200,
+		ChatName:  "Some Channel",
+	})
+	chatStore.RecordMessage(db.StoredMessage{
+		AccountID: "628111",
+		MsgID:     "STAT-1",
+		ChatJID:   "status@broadcast",
+		MsgType:   "text",
+		Body:      "Status update",
+		Timestamp: 1700000300,
+	})
+	// Syncing contact upgrades raw phone chat name to saved contact name
+	chatStore.UpsertContact(db.StoredContact{
+		AccountID: "628111",
+		JID:       "628222@s.whatsapp.net",
+		Phone:     "628222",
+		Name:      "Bob Marley",
+		FullName:  "Bob Marley",
 	})
 	chatStore.Flush()
 
@@ -86,36 +141,71 @@ func TestWebServerEndpointsAndAuth(t *testing.T) {
 	hub := NewHub(chatStore, sessionDB, mgr)
 	hub.PublishQR("2@mock-android-companion-qr-code")
 
+	t.Setenv("WEB_PASSWORD", "ownerpass123")
+
 	mux := http.NewServeMux()
 	hub.Mount(mux)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	// 1. Index HTML
+	// 1. Index HTML loads, but all /api/wa/* data routes are strictly 401 before verification
 	resp, err := http.Get(srv.URL + "/")
 	if err != nil {
 		t.Fatalf("GET /: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "Android Companion") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "Owner Verification") {
 		t.Fatalf("unexpected index response: status=%d", resp.StatusCode)
 	}
 
-	// 2. Status reports WAL & Android Companion
-	resp, err = http.Get(srv.URL + "/api/wa/status")
+	for _, protected := range []string{"/api/wa/accounts", "/api/wa/chats?account=628111", "/api/wa/contacts?account=628111", "/api/wa/qr.png", "/api/wa/media/628111/VO-1"} {
+		r, err := http.Get(srv.URL + protected)
+		if err != nil {
+			t.Fatalf("GET %s: %v", protected, err)
+		}
+		r.Body.Close()
+		if r.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("expected 401 on %s without owner auth, got %d", protected, r.StatusCode)
+		}
+	}
+
+	// 2. Wrong password rejected on request-code
+	resp, _ = http.Post(srv.URL+"/api/wa/auth/request-code", "application/json", strings.NewReader(`{"password":"wrong"}`))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for wrong password, got %d", resp.StatusCode)
+	}
+
+	// 3. Valid password + wrong OTP rejected on verify
+	resp, _ = http.Post(srv.URL+"/api/wa/auth/request-code", "application/json", strings.NewReader(`{"password":"ownerpass123"}`))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on request-code, got %d", resp.StatusCode)
+	}
+	resp, _ = http.Post(srv.URL+"/api/wa/auth/verify", "application/json", strings.NewReader(`{"password":"ownerpass123","code":"000000"}`))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for wrong OTP, got %d", resp.StatusCode)
+	}
+
+	// 4. Complete Owner Login + 6-digit OTP Verification
+	ownerClient := newVerifiedOwnerClient(t, srv.URL, hub, "ownerpass123")
+
+	// Status reports WAL & authenticated=true
+	resp, err = ownerClient.Get(srv.URL + "/api/wa/status")
 	if err != nil {
 		t.Fatalf("GET /api/wa/status: %v", err)
 	}
 	var statusPayload map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&statusPayload)
 	resp.Body.Close()
-	if statusPayload["ok"] != true {
-		t.Fatalf("expected ok=true, got %+v", statusPayload)
+	if statusPayload["ok"] != true || statusPayload["authenticated"] != true {
+		t.Fatalf("expected ok=true & authenticated=true, got %+v", statusPayload)
 	}
 
-	// 3. QR PNG returns valid PNG magic header
-	resp, err = http.Get(srv.URL + "/api/wa/qr.png")
+	// QR PNG returns valid PNG magic header for authenticated owner
+	resp, err = ownerClient.Get(srv.URL + "/api/wa/qr.png")
 	if err != nil {
 		t.Fatalf("GET /api/wa/qr.png: %v", err)
 	}
@@ -125,8 +215,8 @@ func TestWebServerEndpointsAndAuth(t *testing.T) {
 		t.Fatalf("expected valid PNG, status=%d len=%d", resp.StatusCode, len(pngBytes))
 	}
 
-	// 4. Chats & Messages & View-Once Media download
-	resp, err = http.Get(srv.URL + "/api/wa/chats?account=628111&filter=viewonce")
+	// Chats excludes @newsletter & @broadcast AND shows upgraded contact name "Bob Marley"
+	resp, err = ownerClient.Get(srv.URL + "/api/wa/chats?account=628111")
 	if err != nil {
 		t.Fatalf("GET /api/wa/chats: %v", err)
 	}
@@ -135,11 +225,26 @@ func TestWebServerEndpointsAndAuth(t *testing.T) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&chatsPayload)
 	resp.Body.Close()
-	if len(chatsPayload.Chats) != 1 || !chatsPayload.Chats[0].HasViewOnce {
-		t.Fatalf("expected 1 view-once chat, got %+v", chatsPayload.Chats)
+	if len(chatsPayload.Chats) != 1 || !chatsPayload.Chats[0].HasViewOnce || chatsPayload.Chats[0].Name != "Bob Marley" {
+		t.Fatalf("expected 1 non-channel chat named 'Bob Marley', got %+v", chatsPayload.Chats)
 	}
 
-	resp, err = http.Get(srv.URL + "/api/wa/media/628111/VO-1")
+	// Contacts endpoint returns synced contacts
+	resp, err = ownerClient.Get(srv.URL + "/api/wa/contacts?account=628111&q=bob")
+	if err != nil {
+		t.Fatalf("GET /api/wa/contacts: %v", err)
+	}
+	var contactsPayload struct {
+		Contacts []db.StoredContact `json:"contacts"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&contactsPayload)
+	resp.Body.Close()
+	if len(contactsPayload.Contacts) != 1 || contactsPayload.Contacts[0].Name != "Bob Marley" {
+		t.Fatalf("expected 1 contact 'Bob Marley', got %+v", contactsPayload.Contacts)
+	}
+
+	// View-Once media download succeeds for authenticated owner
+	resp, err = ownerClient.Get(srv.URL + "/api/wa/media/628111/VO-1")
 	if err != nil {
 		t.Fatalf("GET /api/wa/media: %v", err)
 	}
@@ -149,26 +254,13 @@ func TestWebServerEndpointsAndAuth(t *testing.T) {
 		t.Fatalf("unexpected media response: status=%d body=%q", resp.StatusCode, string(mediaBytes))
 	}
 
-	// 5. Optional WEB_PASSWORD enforcement
-	t.Setenv("WEB_PASSWORD", "supersecret")
-	resp, err = http.Get(srv.URL + "/api/wa/accounts")
-	if err != nil {
-		t.Fatalf("GET /api/wa/accounts without password: %v", err)
-	}
+	// 5. Logout revokes cookie session immediately
+	resp, _ = ownerClient.Post(srv.URL+"/api/wa/auth/logout", "application/json", nil)
+	resp.Body.Close()
+	resp, _ = ownerClient.Get(srv.URL + "/api/wa/accounts")
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401 without password, got %d", resp.StatusCode)
-	}
-
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/wa/accounts", nil)
-	req.Header.Set("X-Web-Password", "supersecret")
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET /api/wa/accounts with password: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 with valid password, got %d", resp.StatusCode)
+		t.Fatalf("expected 401 after logout, got %d", resp.StatusCode)
 	}
 }
 
@@ -221,8 +313,9 @@ func TestSequentialPairingAndGamesWebRoutes(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	// Create ticket via admin API
-	resp, err := http.Post(srv.URL+"/api/wa/pairing/tickets", "application/json", strings.NewReader(`{"label":"Buyer A","buyerJid":"628555","durationDays":30}`))
+	// Create ticket via verified owner session
+	ownerClient := newVerifiedOwnerClient(t, srv.URL, hub, "")
+	resp, err := ownerClient.Post(srv.URL+"/api/wa/pairing/tickets", "application/json", strings.NewReader(`{"label":"Buyer A","buyerJid":"628555","durationDays":30}`))
 	if err != nil {
 		t.Fatalf("POST /api/wa/pairing/tickets: %v", err)
 	}
@@ -243,7 +336,7 @@ func TestSequentialPairingAndGamesWebRoutes(t *testing.T) {
 		t.Fatalf("timed out waiting for ticket QR")
 	}
 
-	// Buyer pairing page HTML
+	// Buyer pairing page HTML & buyer-scoped QR PNG remain publicly accessible for the buyer token
 	resp, err = http.Get(srv.URL + createRes.PairPath)
 	if err != nil {
 		t.Fatalf("GET pair page: %v", err)
@@ -254,7 +347,6 @@ func TestSequentialPairingAndGamesWebRoutes(t *testing.T) {
 		t.Fatalf("unexpected pair page: status=%d", resp.StatusCode)
 	}
 
-	// Buyer-scoped QR PNG
 	resp, err = http.Get(srv.URL + "/api/wa/pair/" + createRes.Ticket.Token + "/qr.png")
 	if err != nil {
 		t.Fatalf("GET buyer qr.png: %v", err)
@@ -265,7 +357,7 @@ func TestSequentialPairingAndGamesWebRoutes(t *testing.T) {
 		t.Fatalf("expected valid PNG for buyer token, status=%d", resp.StatusCode)
 	}
 
-	// Arcade games page + score submission
+	// Arcade games page + score submission remain public for group players
 	resp, err = http.Get(srv.URL + "/games/snake")
 	if err != nil {
 		t.Fatalf("GET /games/snake: %v", err)

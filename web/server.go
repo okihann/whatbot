@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -33,12 +32,19 @@ var pairHTML []byte
 //go:embed static/games.html
 var gamesHTML []byte
 
-// Mount registers the WhatsApp Web UI, Sequential QR Pairing Queue, Arcade Games, and REST/SSE API onto mux.
+// Mount registers the WhatsApp Web UI, Owner Auth, Sequential QR Pairing Queue, Arcade Games, and REST/SSE API onto mux.
 func (h *Hub) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/", h.handleIndex)
 	mux.HandleFunc("/pair/", h.handlePairPage)
 	mux.HandleFunc("/games", h.handleGamesPage)
 	mux.HandleFunc("/games/", h.handleGamesPage)
+
+	// Owner-Only Authentication & WhatsApp 6-digit Verification endpoints
+	mux.HandleFunc("/api/wa/auth/me", h.handleAuthMe)
+	mux.HandleFunc("/api/wa/auth/request-code", h.handleAuthRequestCode)
+	mux.HandleFunc("/api/wa/auth/verify", h.handleAuthVerify)
+	mux.HandleFunc("/api/wa/auth/logout", h.handleAuthLogout)
+
 	mux.HandleFunc("/api/wa/status", h.handleStatus)
 	mux.HandleFunc("/api/wa/accounts", h.requireAuth(h.handleAccounts))
 	mux.HandleFunc("/api/wa/accounts/add", h.requireAuth(h.handleAddAccount))
@@ -52,43 +58,27 @@ func (h *Hub) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/api/wa/events", h.requireAuth(h.handleSSE))
 	mux.HandleFunc("/api/wa/chats", h.requireAuth(h.handleChats))
 	mux.HandleFunc("/api/wa/chats/read", h.requireAuth(h.handleMarkRead))
+	mux.HandleFunc("/api/wa/contacts", h.requireAuth(h.handleContacts))
+	mux.HandleFunc("/api/wa/avatar", h.requireAuth(h.handleAvatar))
+	mux.HandleFunc("/api/wa/sync", h.requireAuth(h.handleSync))
 	mux.HandleFunc("/api/wa/messages", h.requireAuth(h.handleMessages))
 	mux.HandleFunc("/api/wa/media/", h.requireAuth(h.handleMedia))
 	mux.HandleFunc("/api/wa/send/text", h.requireAuth(h.handleSendText))
 	mux.HandleFunc("/api/wa/send/media", h.requireAuth(h.handleSendMedia))
 }
 
-func webPassword() string {
-	return strings.TrimSpace(os.Getenv("WEB_PASSWORD"))
-}
-
 func (h *Hub) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Web-Password")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-
-		pass := webPassword()
-		if pass != "" {
-			provided := strings.TrimSpace(r.Header.Get("X-Web-Password"))
-			if provided == "" {
-				provided = strings.TrimPrefix(strings.TrimSpace(r.Header.Get("Authorization")), "Bearer ")
-			}
-			if provided == "" {
-				provided = strings.TrimSpace(r.URL.Query().Get("password"))
-			}
-			if provided != pass {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				writeJSON(w, map[string]string{"error": "unauthorized"})
-				return
-			}
+		if !h.isAuthenticatedRequest(r) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			writeJSON(w, map[string]string{"error": "unauthorized — owner login & verification required"})
+			return
 		}
-
 		next(w, r)
 	}
 }
@@ -105,10 +95,12 @@ func (h *Hub) handleIndex(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]any{
-		"ok":           true,
-		"platform":     "Android Companion (View-Once Ready)",
-		"uptimeSec":    int64(time.Since(h.startedAt).Seconds()),
-		"authRequired": webPassword() != "",
+		"ok":            true,
+		"platform":      "Android Companion (View-Once Ready)",
+		"uptimeSec":     int64(time.Since(h.startedAt).Seconds()),
+		"authRequired":  true,
+		"otpRequired":   webOTPRequired(),
+		"authenticated": h.isAuthenticatedRequest(r),
 		"sqlite": map[string]any{
 			"session": db.SQLiteStatus(h.sessionDB),
 			"webchat": h.store.Status(),
@@ -270,6 +262,107 @@ func (h *Hub) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 	h.store.MarkChatRead(req.AccountID, req.ChatJID)
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (h *Hub) resolveActiveAccount(r *http.Request) string {
+	acct := strings.TrimSpace(r.URL.Query().Get("account"))
+	if acct == "" && h.accounts != nil {
+		if list := h.accounts.ListAccounts(); len(list) > 0 {
+			acct = list[0].User
+		}
+	}
+	return acct
+}
+
+func (h *Hub) handleContacts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	acct := h.resolveActiveAccount(r)
+	if acct == "" {
+		writeJSON(w, map[string]any{"contacts": []db.StoredContact{}})
+		return
+	}
+	q := r.URL.Query().Get("q")
+	contacts, err := h.store.ListContacts(acct, q)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSON(w, map[string]string{"error": err.Error()})
+		return
+	}
+	// If no contacts are cached yet in SQLite, pull them live once from whatsmeow ContactStore.
+	if len(contacts) == 0 && q == "" && h.accounts != nil {
+		if cli, ok := h.accounts.GetClient(acct); ok && cli != nil {
+			h.SyncAccount(cli)
+			contacts, _ = h.store.ListContacts(acct, q)
+		}
+	}
+	if contacts == nil {
+		contacts = []db.StoredContact{}
+	}
+	writeJSON(w, map[string]any{"contacts": contacts})
+}
+
+func (h *Hub) handleAvatar(w http.ResponseWriter, r *http.Request) {
+	acct := h.resolveActiveAccount(r)
+	rawJID := strings.TrimSpace(r.URL.Query().Get("jid"))
+	if acct == "" || rawJID == "" || db.IsIgnoredWebChatJID(rawJID) || h.accounts == nil {
+		http.NotFound(w, r)
+		return
+	}
+	cli, ok := h.accounts.GetClient(acct)
+	if !ok || cli == nil {
+		http.NotFound(w, r)
+		return
+	}
+	targetJID, err := parseTargetJID(rawJID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	data, err := h.FetchAvatarBytes(ctx, cli, acct, targetJID)
+	if err != nil || len(data) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	_, _ = w.Write(data)
+}
+
+func (h *Hub) handleSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	var req struct {
+		AccountID string `json:"accountId"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	acct := strings.TrimSpace(req.AccountID)
+	if acct == "" {
+		acct = h.resolveActiveAccount(r)
+	}
+	if acct == "" || h.accounts == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]string{"error": "no connected account to sync"})
+		return
+	}
+	cli, ok := h.accounts.GetClient(acct)
+	if !ok || cli == nil {
+		w.WriteHeader(http.StatusNotFound)
+		writeJSON(w, map[string]string{"error": "account not connected"})
+		return
+	}
+	contactsCount, groupsCount := h.SyncAccount(cli)
+	chats, _ := h.store.ListChats(acct, "", "all")
+	writeJSON(w, map[string]any{
+		"ok":            true,
+		"contactsCount": contactsCount,
+		"groupsCount":   groupsCount,
+		"chatsCount":    len(chats),
+	})
 }
 
 func (h *Hub) handleMessages(w http.ResponseWriter, r *http.Request) {

@@ -63,8 +63,15 @@
   .chat-item { display: flex; align-items: center; gap: 12px; padding: 11px 14px; cursor: pointer; border-bottom: 1px solid rgba(34,46,53,0.55); transition: background 0.1s; }
   .chat-item:hover { background: var(--bg-hover); }
   .chat-item.active { background: var(--bg-active); }
-  .avatar { width: 44px; height: 44px; border-radius: 50%; background: #2a3942; color: var(--text-primary); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0; }
+  .avatar { width: 44px; height: 44px; border-radius: 50%; background: #2a3942; color: var(--text-primary); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0; position: relative; overflow: hidden; }
   .avatar.group { background: #1d3b46; color: #53bdeb; }
+  .avatar img.avatar-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; background: #2a3942; }
+  .auth-backdrop { position: fixed; inset: 0; background: rgba(11,20,26,0.96); backdrop-filter: blur(8px); display: none; align-items: center; justify-content: center; z-index: 80; padding: 16px; }
+  .auth-backdrop.show { display: flex; }
+  .otp-input { letter-spacing: 6px; font-size: 20px; font-weight: 700; text-align: center; }
+  .auth-note { font-size: 12px; color: var(--text-secondary); background: rgba(0,168,132,0.08); border: 1px solid rgba(0,168,132,0.28); padding: 9px 11px; border-radius: 8px; line-height: 1.45; }
+  .auth-err { font-size: 12.5px; color: #ff8a97; display: none; }
+  .auth-err.show { display: block; }
   .chat-meta { flex: 1; min-width: 0; }
   .chat-top { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; margin-bottom: 3px; }
   .chat-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -193,20 +200,23 @@
       </div>
       <div class="account-row">
         <select class="account-select" id="accountSelect" title="Active WhatsApp account"></select>
-        <button class="btn-sm primary" id="pairBtn" title="Pair new Android Companion via QR">+ Pair QR</button>
-        <button class="btn-sm" id="queueBtn" title="Sequential QR Queue for selling bot slots">🎟️ Queue</button>
+        <button class="btn-sm primary" id="pairBtn" title="Pair new Android Companion via QR">+ Pair</button>
+        <button class="btn-sm" id="syncBtn" title="Sync all chats, groups, and contacts from WhatsApp">🔄 Sync</button>
+        <button class="btn-sm" id="queueBtn" title="Sequential QR Queue for selling bot slots">🎟️</button>
         <button class="btn-sm" id="newChatBtn" title="Start chat by phone number">+ Chat</button>
         <button class="btn-sm danger" id="unlinkBtn" title="Unlink selected account">Unlink</button>
+        <button class="btn-sm" id="logoutBtn" title="Lock & log out owner session">🔒</button>
       </div>
     </div>
 
     <div class="search-wrap">
-      <input class="search-input" id="searchInput" type="search" placeholder="Search chats or phone numbers...">
+      <input class="search-input" id="searchInput" type="search" placeholder="Search chats, contacts, or phone numbers...">
       <div class="filters" id="filterPills">
         <button class="pill active" data-filter="all">All</button>
         <button class="pill" data-filter="unread">Unread</button>
         <button class="pill" data-filter="groups">Groups</button>
         <button class="pill" data-filter="viewonce">👁️ View-Once</button>
+        <button class="pill" data-filter="contacts">👤 Contacts</button>
       </div>
     </div>
 
@@ -310,14 +320,24 @@
   </div>
 </div>
 
-<!-- Password Modal -->
-<div class="modal-backdrop" id="authModal">
-  <div class="modal">
-    <h3>Authentication Required</h3>
-    <p>Enter your <code>WEB_PASSWORD</code> to unlock NopeBot Web.</p>
-    <input type="password" id="authPasswordInput" placeholder="Password">
+<!-- Owner-Only Login & WhatsApp Verification Modal -->
+<div class="auth-backdrop" id="authModal">
+  <div class="modal" style="max-width:420px;">
+    <h3>🔐 NopeBot Owner Verification</h3>
+    <p id="authSubtitle">This WhatsApp Web UI is locked to the bot owner only. Verify your identity with a 6-digit code sent to your WhatsApp (or type <code>.weblogin</code> in WhatsApp).</p>
+    <div id="authPassWrap" style="display:none;flex-direction:column;gap:6px;">
+      <label style="font-size:12px;color:var(--text-secondary);">Owner Password (<code>WEB_PASSWORD</code>)</label>
+      <input type="password" id="authPasswordInput" placeholder="Enter owner password" autocomplete="current-password">
+    </div>
+    <button class="btn-sm" id="authRequestCodeBtn" style="padding:10px 12px;background:#1f3b4d;color:#7fd4ff;border-color:rgba(83,189,235,0.35);">📩 Send 6-Digit Verification Code</button>
+    <div class="auth-note" id="authDeliveryNote" style="display:none;"></div>
+    <div id="authOtpWrap" style="display:flex;flex-direction:column;gap:6px;">
+      <label style="font-size:12px;color:var(--text-secondary);">6-Digit Verification Code</label>
+      <input type="text" class="otp-input" id="authCodeInput" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
+    </div>
+    <div class="auth-err" id="authErr"></div>
     <div class="modal-actions">
-      <button class="btn-sm primary" id="authSubmitBtn">Unlock</button>
+      <button class="btn-sm primary" id="authSubmitBtn" style="width:100%;padding:10px 14px;">🔓 Verify &amp; Unlock</button>
     </div>
   </div>
 </div>
@@ -336,12 +356,15 @@
 <script>
 (() => {
   const state = {
-    password: localStorage.getItem('nopebot_web_password') || '',
+    authenticated: false,
+    passwordRequired: false,
+    otpRequired: true,
     accounts: [],
     account: '',
     filter: 'all',
     search: '',
     chats: [],
+    contacts: [],
     activeChat: null,
     messages: [],
     quoteMsg: null,
@@ -360,22 +383,23 @@
     showToast._t = setTimeout(() => el.classList.remove('show'), 2800);
   }
 
-  function authHeaders(extra = {}) {
-    const h = { ...extra };
-    if (state.password) h['X-Web-Password'] = state.password;
-    return h;
+  function showAuthLock() {
+    state.authenticated = false;
+    if (state.eventSource) {
+      state.eventSource.close();
+      state.eventSource = null;
+    }
+    $('authModal').classList.add('show');
   }
 
   function withAuthQuery(url) {
-    if (!state.password) return url;
-    const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}password=${encodeURIComponent(state.password)}`;
+    return url;
   }
 
   async function apiFetch(url, opts = {}) {
-    const res = await fetch(url, { ...opts, headers: authHeaders(opts.headers || {}) });
+    const res = await fetch(url, { credentials: 'same-origin', ...opts, headers: { ...(opts.headers || {}) } });
     if (res.status === 401) {
-      $('authModal').classList.add('show');
+      showAuthLock();
       throw new Error('Unauthorized');
     }
     const ct = res.headers.get('content-type') || '';
@@ -417,27 +441,56 @@
     return clean.slice(0, 2).toUpperCase();
   }
 
+  function avatarUrl(acct, jid) {
+    return `/api/wa/avatar?account=${encodeURIComponent(acct)}&jid=${encodeURIComponent(jid)}`;
+  }
+
+  function renderAvatarHTML(acct, jid, name, isGroup) {
+    const src = escapeHtml(avatarUrl(acct, jid));
+    return `<div class="avatar ${isGroup ? 'group' : ''}"><span>${escapeHtml(initials(name || jid))}</span><img class="avatar-img" src="${src}" alt="" loading="lazy" onerror="this.remove()"></div>`;
+  }
+
   function mediaUrl(acct, msgId, track = '') {
     let url = `/api/wa/media/${encodeURIComponent(acct)}/${encodeURIComponent(msgId)}`;
     if (track) url += `?track=${encodeURIComponent(track)}`;
-    return withAuthQuery(url);
+    return url;
   }
 
   async function loadStatus() {
     try {
-      const st = await fetch('/api/wa/status').then(r => r.json());
+      const [st, me] = await Promise.all([
+        fetch('/api/wa/status', { credentials: 'same-origin' }).then(r => r.json()),
+        fetch('/api/wa/auth/me', { credentials: 'same-origin' }).then(r => r.json()),
+      ]);
       const sess = (st.sqlite && st.sqlite.session) || {};
       const jm = (sess.journal_mode || 'wal').toUpperCase();
       const sync = sess.synchronous === '1' ? 'NORMAL' : (sess.synchronous || '');
       $('sqliteBadge').textContent = `SQLite ${jm}${sync ? '/' + sync : ''}`;
-      if (st.authRequired && !state.password) {
+
+      state.authenticated = !!me.authenticated;
+      state.passwordRequired = !!me.passwordRequired;
+      state.otpRequired = me.otpRequired !== false;
+
+      $('authPassWrap').style.display = state.passwordRequired ? 'flex' : 'none';
+      $('authOtpWrap').style.display = state.otpRequired ? 'flex' : 'none';
+      $('authRequestCodeBtn').style.display = state.otpRequired ? 'block' : 'none';
+
+      if (me.ownerHint) {
+        $('authSubtitle').innerHTML = `Owner-only WhatsApp Web UI. Click below to send a 6-digit verification code to Owner WhatsApp (<code>${escapeHtml(me.ownerHint)}</code>), or type <code>.weblogin</code> in WhatsApp.`;
+      } else if (!me.whatsappConnected) {
+        $('authSubtitle').innerHTML = `Owner-only WhatsApp Web UI. No WhatsApp account is linked yet — click below to print a 6-digit bootstrap code in your server console.`;
+      }
+
+      if (!state.authenticated) {
         $('authModal').classList.add('show');
         return false;
       }
+      $('authModal').classList.remove('show');
       return true;
     } catch (e) {
       console.error(e);
-      return true;
+      showAuthLock();
+      return false;
     }
   }
 
@@ -469,9 +522,17 @@
       if (data.qr && data.qr.available && state.qrOpen) {
         renderQRImage(data.qr.updatedAt);
       }
-      await loadChats();
+      await loadSidebar();
     } catch (e) {
       if (e.message !== 'Unauthorized') showToast(e.message);
+    }
+  }
+
+  async function loadSidebar() {
+    if (state.filter === 'contacts') {
+      await loadContacts();
+    } else {
+      await loadChats();
     }
   }
 
@@ -495,17 +556,36 @@
     }
   }
 
+  async function loadContacts() {
+    if (!state.account) {
+      state.contacts = [];
+      renderContacts();
+      return;
+    }
+    try {
+      const qs = new URLSearchParams({
+        account: state.account,
+        q: state.search,
+      });
+      const data = await apiFetch(`/api/wa/contacts?${qs.toString()}`);
+      state.contacts = data.contacts || [];
+      renderContacts();
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
   function renderChats() {
     const list = $('chatList');
     if (state.chats.length === 0) {
-      list.innerHTML = `<div style="padding:28px 16px;text-align:center;color:var(--text-secondary);">No conversations yet.<br>Send or receive a message, or click <strong>+ Chat</strong>.</div>`;
+      list.innerHTML = `<div style="padding:28px 16px;text-align:center;color:var(--text-secondary);">No conversations yet.<br>Click <strong>🔄 Sync</strong> to load all chats &amp; groups, or <strong>+ Chat</strong>.</div>`;
       return;
     }
     list.innerHTML = state.chats.map(c => {
       const active = state.activeChat && state.activeChat.chatJid === c.chatJid ? 'active' : '';
       return `
         <div class="chat-item ${active}" data-jid="${escapeHtml(c.chatJid)}">
-          <div class="avatar ${c.isGroup ? 'group' : ''}">${escapeHtml(initials(c.name || c.chatJid))}</div>
+          ${renderAvatarHTML(state.account, c.chatJid, c.name || c.chatJid, c.isGroup)}
           <div class="chat-meta">
             <div class="chat-top">
               <div class="chat-name">${escapeHtml(c.name || c.chatJid)}</div>
@@ -532,6 +612,47 @@
     });
   }
 
+  function renderContacts() {
+    const list = $('chatList');
+    if (state.contacts.length === 0) {
+      list.innerHTML = `<div style="padding:28px 16px;text-align:center;color:var(--text-secondary);">No contacts found.<br>Click <strong>🔄 Sync</strong> to pull contacts from WhatsApp.</div>`;
+      return;
+    }
+    list.innerHTML = state.contacts.map(c => {
+      const sub = [c.phone, c.businessName || (c.pushName && c.pushName !== c.name ? `~${c.pushName}` : '')].filter(Boolean).join(' • ');
+      const active = state.activeChat && state.activeChat.chatJid === c.jid ? 'active' : '';
+      return `
+        <div class="chat-item ${active}" data-contact-jid="${escapeHtml(c.jid)}">
+          ${renderAvatarHTML(state.account, c.jid, c.name || c.phone || c.jid, false)}
+          <div class="chat-meta">
+            <div class="chat-top">
+              <div class="chat-name">${escapeHtml(c.name || c.phone || c.jid)}</div>
+            </div>
+            <div class="chat-bottom">
+              <div class="chat-preview">${escapeHtml(sub || c.jid)}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    list.querySelectorAll('[data-contact-jid]').forEach(el => {
+      el.addEventListener('click', () => {
+        const jid = el.getAttribute('data-contact-jid');
+        const found = state.contacts.find(x => x.jid === jid);
+        if (found) {
+          openChat({
+            accountId: state.account,
+            chatJid: found.jid,
+            name: found.name || found.phone || found.jid,
+            isGroup: false,
+            unreadCount: 0,
+          });
+        }
+      });
+    });
+  }
+
   async function openChat(chat) {
     state.activeChat = chat;
     clearQuote();
@@ -540,15 +661,17 @@
     $('chatHeader').style.display = 'flex';
     $('messages').style.display = 'flex';
     $('composer').style.display = 'flex';
-    $('headerAvatar').textContent = initials(chat.name || chat.chatJid);
-    $('headerAvatar').className = `avatar ${chat.isGroup ? 'group' : ''}`;
+    const headerAv = $('headerAvatar');
+    headerAv.className = `avatar ${chat.isGroup ? 'group' : ''}`;
+    headerAv.innerHTML = `<span>${escapeHtml(initials(chat.name || chat.chatJid))}</span><img class="avatar-img" src="${escapeHtml(avatarUrl(state.account, chat.chatJid))}" alt="" onerror="this.remove()">`;
     $('headerTitle').textContent = chat.name || chat.chatJid;
     $('headerSub').textContent = chat.chatJid;
-    renderChats();
+    if (state.filter === 'contacts') renderContacts();
+    else renderChats();
 
     if (chat.unreadCount > 0) {
       chat.unreadCount = 0;
-      renderChats();
+      if (state.filter !== 'contacts') renderChats();
       apiFetch('/api/wa/chats/read', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -808,13 +931,13 @@
     $('chatHeader').style.display = 'none';
     $('messages').style.display = 'none';
     $('composer').style.display = 'none';
-    loadChats();
+    loadSidebar();
   });
 
   $('searchInput').addEventListener('input', (e) => {
     state.search = e.target.value;
     clearTimeout(state._searchT);
-    state._searchT = setTimeout(loadChats, 150);
+    state._searchT = setTimeout(loadSidebar, 150);
   });
 
   $('filterPills').querySelectorAll('.pill').forEach(btn => {
@@ -822,8 +945,41 @@
       $('filterPills').querySelectorAll('.pill').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       state.filter = btn.getAttribute('data-filter');
-      loadChats();
+      loadSidebar();
     });
+  });
+
+  $('syncBtn').addEventListener('click', async () => {
+    if (!state.account) {
+      showToast('No linked account to sync');
+      return;
+    }
+    const btn = $('syncBtn');
+    const prev = btn.textContent;
+    btn.textContent = '⏳ Syncing...';
+    btn.disabled = true;
+    try {
+      const res = await apiFetch('/api/wa/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: state.account }),
+      });
+      showToast(`Synced ${res.contactsCount || 0} contacts, ${res.groupsCount || 0} groups (${res.chatsCount || 0} chats)`);
+      await loadSidebar();
+    } catch (e) {
+      if (e.message !== 'Unauthorized') showToast(`Sync failed: ${e.message}`);
+    } finally {
+      btn.textContent = prev;
+      btn.disabled = false;
+    }
+  });
+
+  $('logoutBtn').addEventListener('click', async () => {
+    try {
+      await fetch('/api/wa/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    } catch {}
+    showToast('Session locked');
+    showAuthLock();
   });
 
   $('pairBtn').addEventListener('click', startPairing);
@@ -928,18 +1084,93 @@
         });
       }
       await loadMessages(true);
-      loadChats();
+      if (state.filter !== 'contacts') loadChats();
     } catch (err) {
       showToast(`Send failed: ${err.message}`);
     }
   });
 
-  $('authSubmitBtn').addEventListener('click', async () => {
-    state.password = $('authPasswordInput').value.trim();
-    localStorage.setItem('nopebot_web_password', state.password);
-    $('authModal').classList.remove('show');
-    connectSSE();
-    await loadAccounts();
+  function showAuthError(msg) {
+    const el = $('authErr');
+    if (!msg) {
+      el.classList.remove('show');
+      el.textContent = '';
+      return;
+    }
+    el.textContent = msg;
+    el.classList.add('show');
+  }
+
+  $('authRequestCodeBtn').addEventListener('click', async () => {
+    showAuthError('');
+    const btn = $('authRequestCodeBtn');
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ Sending verification code...';
+    try {
+      const res = await fetch('/api/wa/auth/request-code', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: $('authPasswordInput').value.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showAuthError(data.error || 'Could not send code');
+        return;
+      }
+      const note = $('authDeliveryNote');
+      note.style.display = 'block';
+      if (data.delivery === 'whatsapp') {
+        note.innerHTML = `✅ 6-digit verification code sent to Owner WhatsApp (<code>${escapeHtml(data.target)}</code>). Expires in 5 minutes.`;
+      } else {
+        note.innerHTML = `🖥️ No WhatsApp linked yet — check your <strong>server console / Pterodactyl terminal</strong> for the 6-digit code.`;
+      }
+      $('authCodeInput').focus();
+    } catch (e) {
+      showAuthError(e.message || 'Network error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
+  });
+
+  async function submitOwnerVerify() {
+    showAuthError('');
+    const btn = $('authSubmitBtn');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/wa/auth/verify', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: $('authPasswordInput').value.trim(),
+          code: $('authCodeInput').value.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showAuthError(data.error || 'Verification failed');
+        return;
+      }
+      state.authenticated = true;
+      $('authCodeInput').value = '';
+      $('authPasswordInput').value = '';
+      $('authModal').classList.remove('show');
+      showToast('🔓 Owner session verified!');
+      connectSSE();
+      await loadAccounts();
+    } catch (e) {
+      showAuthError(e.message || 'Network error');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  $('authSubmitBtn').addEventListener('click', submitOwnerVerify);
+  $('authCodeInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitOwnerVerify();
   });
 
   $('lightboxClose').addEventListener('click', () => $('lightbox').classList.remove('show'));

@@ -171,7 +171,7 @@ func configureAndroidCompanion() {
 	if store.DeviceProps != nil {
 		store.DeviceProps.Os = proto.String("Android")
 		store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_ANDROID_PHONE.Enum()
-		store.DeviceProps.RequireFullSync = proto.Bool(false)
+		store.DeviceProps.RequireFullSync = proto.Bool(true)
 		store.DeviceProps.Version = &waCompanionReg.DeviceProps_AppVersion{
 			Primary:    proto.Uint32(2),
 			Secondary:  proto.Uint32(24),
@@ -207,6 +207,9 @@ func attachClientHandlers(client *whatsmeow.Client) {
 		case *events.Connected:
 			fmt.Printf("\n✅ Bot %s is live and connected!\n", client.Store.ID)
 			registerClient(client)
+			if webHub != nil {
+				go webHub.SyncAccount(client)
+			}
 		case *events.Disconnected:
 			if webHub != nil {
 				webHub.Broadcast("accounts_updated", nil)
@@ -395,6 +398,7 @@ func main() {
 	accountMgr := &botAccountManager{}
 	webHub = web.NewHub(chatStore, sessionDB, accountMgr)
 	webHub.SetBotStore(botStore)
+	web.SetDefaultHub(webHub)
 
 	// 4. Strict FIFO Sequential QR Pairing Queue (90s timeout per slot) for selling bots.
 	pairQueue = pairing.NewQueue(botStore, pairNewAndroidCompanion, pairing.DefaultPairingTimeout, func() {

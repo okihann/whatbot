@@ -50,13 +50,37 @@ type StoredMessage struct {
 	ChatIsGroup bool   `json:"-"`
 }
 
+// StoredContact represents a synced WhatsApp contact stored for the Web UI.
+type StoredContact struct {
+	AccountID    string `json:"accountId"`
+	JID          string `json:"jid"`
+	Phone        string `json:"phone"`
+	Name         string `json:"name"`
+	FullName     string `json:"fullName"`
+	PushName     string `json:"pushName"`
+	BusinessName string `json:"businessName"`
+	UpdatedAt    int64  `json:"updatedAt"`
+}
+
+// IsIgnoredWebChatJID returns true for WhatsApp Channels (@newsletter) and
+// Status/Broadcast lists (@broadcast) that should never appear in the chat list.
+func IsIgnoredWebChatJID(jid string) bool {
+	j := strings.ToLower(strings.TrimSpace(jid))
+	if j == "" {
+		return true
+	}
+	return strings.HasSuffix(j, "@newsletter") ||
+		strings.HasSuffix(j, "@broadcast") ||
+		j == "status@broadcast"
+}
+
 type writeOp struct {
 	fn   func(tx *sql.Tx) error
 	done chan struct{}
 }
 
-// ChatStore persists chats and messages into a dedicated sequential-WAL SQLite
-// database with a batched background writer goroutine.
+// ChatStore persists chats, contacts, and messages into a dedicated sequential-WAL
+// SQLite database with a batched background writer goroutine.
 type ChatStore struct {
 	db        *sql.DB
 	mediaRoot string
@@ -110,6 +134,22 @@ func OpenChatStore(dbPath, mediaRoot string) (*ChatStore, error) {
 		PRIMARY KEY (account_id, msg_id)
 	);
 	CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages (account_id, chat_jid, timestamp DESC);
+
+	CREATE TABLE IF NOT EXISTS contacts (
+		account_id    TEXT NOT NULL,
+		jid           TEXT NOT NULL,
+		phone         TEXT NOT NULL DEFAULT '',
+		name          TEXT NOT NULL DEFAULT '',
+		full_name     TEXT NOT NULL DEFAULT '',
+		push_name     TEXT NOT NULL DEFAULT '',
+		business_name TEXT NOT NULL DEFAULT '',
+		updated_at    INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (account_id, jid)
+	);
+	CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts (account_id, name COLLATE NOCASE);
+
+	DELETE FROM chats WHERE LOWER(chat_jid) LIKE '%@newsletter' OR LOWER(chat_jid) LIKE '%@broadcast';
+	DELETE FROM messages WHERE LOWER(chat_jid) LIKE '%@newsletter' OR LOWER(chat_jid) LIKE '%@broadcast';
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		conn.Close()
@@ -306,7 +346,7 @@ func boolToInt(b bool) int {
 
 // RecordMessage persists a message and updates its chat summary sequentially.
 func (cs *ChatStore) RecordMessage(m StoredMessage) {
-	if m.AccountID == "" || m.MsgID == "" || m.ChatJID == "" {
+	if m.AccountID == "" || m.MsgID == "" || m.ChatJID == "" || IsIgnoredWebChatJID(m.ChatJID) {
 		return
 	}
 	if m.Timestamp == 0 {
@@ -353,7 +393,7 @@ func (cs *ChatStore) RecordMessage(m StoredMessage) {
 			INSERT INTO chats (account_id, chat_jid, name, is_group, last_message, last_timestamp, unread_count, has_view_once)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(account_id, chat_jid) DO UPDATE SET
-				name = CASE WHEN excluded.name != '' AND (chats.name = '' OR chats.name = chats.chat_jid OR excluded.is_group = 1) THEN excluded.name ELSE chats.name END,
+				name = CASE WHEN excluded.name != '' AND (chats.name = '' OR chats.name = chats.chat_jid OR chats.name = SUBSTR(chats.chat_jid, 1, INSTR(chats.chat_jid, '@') - 1) OR excluded.is_group = 1) THEN excluded.name ELSE chats.name END,
 				is_group = MAX(chats.is_group, excluded.is_group),
 				last_message = CASE WHEN excluded.last_timestamp >= chats.last_timestamp THEN excluded.last_message ELSE chats.last_message END,
 				last_timestamp = MAX(chats.last_timestamp, excluded.last_timestamp),
@@ -364,6 +404,137 @@ func (cs *ChatStore) RecordMessage(m StoredMessage) {
 			preview, m.Timestamp, unreadDelta, boolToInt(m.IsViewOnce),
 		)
 		return err
+	})
+}
+
+// UpsertChat ensures a conversation (e.g. from HistorySync, joined groups, or contacts)
+// exists in the chats table and refreshes its display name without overwriting newer messages.
+func (cs *ChatStore) UpsertChat(c StoredChat) {
+	if c.AccountID == "" || c.ChatJID == "" || IsIgnoredWebChatJID(c.ChatJID) {
+		return
+	}
+	name := strings.TrimSpace(c.Name)
+	if name == "" {
+		name = strings.Split(c.ChatJID, "@")[0]
+	}
+	cs.enqueue(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`
+			INSERT INTO chats (account_id, chat_jid, name, is_group, last_message, last_timestamp, unread_count, has_view_once)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(account_id, chat_jid) DO UPDATE SET
+				name = CASE
+					WHEN excluded.name != ''
+					 AND excluded.name != excluded.chat_jid
+					 AND excluded.name != SUBSTR(excluded.chat_jid, 1, INSTR(excluded.chat_jid, '@') - 1)
+					THEN excluded.name
+					WHEN chats.name = '' THEN excluded.name
+					ELSE chats.name
+				END,
+				is_group = MAX(chats.is_group, excluded.is_group),
+				last_message = CASE WHEN excluded.last_message != '' AND excluded.last_timestamp >= chats.last_timestamp THEN excluded.last_message ELSE chats.last_message END,
+				last_timestamp = MAX(chats.last_timestamp, excluded.last_timestamp),
+				unread_count = MAX(chats.unread_count, excluded.unread_count)
+		`,
+			c.AccountID, c.ChatJID, name, boolToInt(c.IsGroup),
+			c.LastMessage, c.LastTimestamp, c.UnreadCount, boolToInt(c.HasViewOnce),
+		)
+		return err
+	})
+}
+
+// UpsertContact persists a synced WhatsApp contact and also upgrades any matching chat's display name.
+func (cs *ChatStore) UpsertContact(c StoredContact) {
+	if c.AccountID == "" || c.JID == "" || IsIgnoredWebChatJID(c.JID) {
+		return
+	}
+	if c.UpdatedAt == 0 {
+		c.UpdatedAt = time.Now().Unix()
+	}
+	name := strings.TrimSpace(c.Name)
+	if name == "" {
+		name = strings.TrimSpace(c.FullName)
+	}
+	if name == "" {
+		name = strings.TrimSpace(c.PushName)
+	}
+	if name == "" {
+		name = strings.TrimSpace(c.BusinessName)
+	}
+	if name == "" {
+		name = c.Phone
+	}
+	if name == "" {
+		name = strings.Split(c.JID, "@")[0]
+	}
+
+	cs.enqueue(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`
+			INSERT INTO contacts (account_id, jid, phone, name, full_name, push_name, business_name, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(account_id, jid) DO UPDATE SET
+				phone = CASE WHEN excluded.phone != '' THEN excluded.phone ELSE contacts.phone END,
+				name = CASE WHEN excluded.name != '' THEN excluded.name ELSE contacts.name END,
+				full_name = CASE WHEN excluded.full_name != '' THEN excluded.full_name ELSE contacts.full_name END,
+				push_name = CASE WHEN excluded.push_name != '' THEN excluded.push_name ELSE contacts.push_name END,
+				business_name = CASE WHEN excluded.business_name != '' THEN excluded.business_name ELSE contacts.business_name END,
+				updated_at = excluded.updated_at
+		`, c.AccountID, c.JID, c.Phone, name, c.FullName, c.PushName, c.BusinessName, c.UpdatedAt)
+		if err != nil {
+			return err
+		}
+		// Upgrade existing DM chat name if it was just a phone number or empty.
+		if name != "" && name != c.Phone && name != c.JID {
+			_, _ = tx.Exec(`
+				UPDATE chats
+				SET name = ?
+				WHERE account_id = ? AND chat_jid = ? AND is_group = 0
+				  AND (name = '' OR name = chat_jid OR name = SUBSTR(chat_jid, 1, INSTR(chat_jid, '@') - 1))
+			`, name, c.AccountID, c.JID)
+		}
+		return nil
+	})
+}
+
+// ListContacts returns all synced contacts for an account, optionally filtered by query.
+func (cs *ChatStore) ListContacts(accountID, search string) ([]StoredContact, error) {
+	query := `
+		SELECT account_id, jid, phone, name, full_name, push_name, business_name, updated_at
+		FROM contacts
+		WHERE account_id = ?
+		  AND LOWER(jid) NOT LIKE '%@newsletter'
+		  AND LOWER(jid) NOT LIKE '%@broadcast'
+	`
+	args := []any{accountID}
+	if q := strings.TrimSpace(search); q != "" {
+		like := "%" + strings.ToLower(q) + "%"
+		query += ` AND (LOWER(name) LIKE ? OR LOWER(full_name) LIKE ? OR LOWER(push_name) LIKE ? OR LOWER(phone) LIKE ? OR LOWER(jid) LIKE ?)`
+		args = append(args, like, like, like, like, like)
+	}
+	query += ` ORDER BY name COLLATE NOCASE ASC LIMIT 2000`
+
+	rows, err := cs.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]StoredContact, 0)
+	for rows.Next() {
+		var c StoredContact
+		if err := rows.Scan(&c.AccountID, &c.JID, &c.Phone, &c.Name, &c.FullName, &c.PushName, &c.BusinessName, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// PurgeIgnoredChats deletes any WhatsApp Channel (@newsletter) or Broadcast rows.
+func (cs *ChatStore) PurgeIgnoredChats() {
+	cs.enqueue(func(tx *sql.Tx) error {
+		_, _ = tx.Exec(`DELETE FROM chats WHERE LOWER(chat_jid) LIKE '%@newsletter' OR LOWER(chat_jid) LIKE '%@broadcast'`)
+		_, _ = tx.Exec(`DELETE FROM messages WHERE LOWER(chat_jid) LIKE '%@newsletter' OR LOWER(chat_jid) LIKE '%@broadcast'`)
+		return nil
 	})
 }
 
@@ -399,6 +570,8 @@ func (cs *ChatStore) ListChats(accountID, search, filter string) ([]StoredChat, 
 		SELECT account_id, chat_jid, name, is_group, last_message, last_timestamp, unread_count, has_view_once
 		FROM chats
 		WHERE account_id = ?
+		  AND LOWER(chat_jid) NOT LIKE '%@newsletter'
+		  AND LOWER(chat_jid) NOT LIKE '%@broadcast'
 	`
 	args := []any{accountID}
 
@@ -415,7 +588,7 @@ func (cs *ChatStore) ListChats(accountID, search, filter string) ([]StoredChat, 
 	case "viewonce":
 		query += ` AND has_view_once = 1`
 	}
-	query += ` ORDER BY last_timestamp DESC LIMIT 200`
+	query += ` ORDER BY last_timestamp DESC, name COLLATE NOCASE ASC LIMIT 1000`
 
 	rows, err := cs.db.Query(query, args...)
 	if err != nil {
