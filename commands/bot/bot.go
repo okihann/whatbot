@@ -34,7 +34,7 @@ func init() {
 		{Name: "jadibot", Aliases: []string{"scanbot"}, Category: "bot", OwnerOnly: true, Description: "🔒 [Owner-Only] Queue a sequential Android Companion QR pairing slot for selling/linking a bot.", Usage: ".jadibot [label] [days]", Execute: cmdJadiBot},
 		{Name: "lockjadibot", Category: "bot", OwnerOnly: true, Description: "Lock or unlock .jadibot (locked by default). Usage: .lockjadibot on|off", Execute: cmdLockJadiBot},
 		{Name: "trackbot", Category: "bot", OwnerOnly: true, Description: "List all active linked bot tenants and sequential QR queue status.", Execute: cmdTrackBot},
-		{Name: "bot", Aliases: []string{"botinfo", "botofficial"}, Category: "bot", Description: "Show bot runtime, Android Companion status, and SQLite WAL diagnostics.", Execute: cmdBotInfo},
+		{Name: "bot", Aliases: []string{"botinfo", "botofficial"}, Category: "bot", OwnerOnly: true, Description: "Show bot runtime, Android Companion status, and SQLite WAL diagnostics.", Execute: cmdBotInfo},
 		{Name: "botsettings", Category: "bot", OwnerOnly: true, Description: "Show current per-bot tenant settings.", Execute: cmdBotSettings},
 		{Name: "selfmode", Category: "bot", OwnerOnly: true, Description: "Toggle self-mode (only owner can trigger commands). Usage: .selfmode on|off", Execute: cmdToggleTenantBool("self")},
 		{Name: "groupmode", Category: "bot", OwnerOnly: true, Description: "Toggle group-only mode (ignore non-owner DMs). Usage: .groupmode on|off", Execute: cmdToggleTenantBool("group")},
@@ -42,7 +42,7 @@ func init() {
 		{Name: "rejectcall", Category: "bot", OwnerOnly: true, Description: "Toggle automatic incoming call rejection. Usage: .rejectcall on|off", Execute: cmdToggleTenantBool("rejectcall")},
 		{Name: "answercall", Category: "bot", OwnerOnly: true, Description: "Set auto-reply message sent when a call is rejected. Usage: .answercall <text|off>", Execute: cmdAnswerCall},
 		{Name: "pacing", Category: "bot", OwnerOnly: true, Description: "Set per-chat command cooldown in ms. Usage: .pacing <ms>", Execute: cmdPacing},
-		{Name: "nsfw", Category: "bot", Description: "Toggle NSFW commands for this group (Admin) or bot (Owner). Usage: .nsfw on|off", Execute: cmdNSFW},
+		{Name: "nsfw", Category: "bot", OwnerOnly: true, Description: "Toggle NSFW command gate for this group or bot (Owner-Only). Usage: .nsfw on|off", Execute: cmdNSFW},
 		{Name: "setbotname", Category: "bot", OwnerOnly: true, Description: "Set custom bot display name for this tenant. Usage: .setbotname <name>", Execute: cmdSetBotName},
 		{Name: "setbotowner", Category: "bot", OwnerOnly: true, Description: "Set buyer/owner phone number for this tenant. Usage: .setbotowner <phone>", Execute: cmdSetBotOwner},
 		{Name: "setpp", Category: "bot", OwnerOnly: true, Description: "Set bot profile picture (reply to an image).", Execute: cmdSetPP},
@@ -52,8 +52,8 @@ func init() {
 		{Name: "channelpost", Category: "bot", OwnerOnly: true, Description: "Post text to a WhatsApp Channel (Newsletter). Usage: .channelpost <channel_jid> <text>", Execute: cmdChannelPost},
 		{Name: "listgroup", Category: "bot", OwnerOnly: true, Description: "List all joined WhatsApp groups.", Execute: cmdListGroup},
 		{Name: "clearchat", Aliases: []string{"deletechat"}, Category: "bot", OwnerOnly: true, Description: "Clear local cached chat history for this chat.", Execute: cmdClearChat},
-		{Name: "gostats", Category: "bot", Description: "Show Go runtime memory, goroutines, and GC stats.", Execute: cmdGoStats},
-		{Name: "msgstats", Aliases: []string{"stats"}, Category: "bot", Description: "Show bot message/command throughput and SQLite WAL stats.", Execute: cmdMsgStats},
+		{Name: "gostats", Category: "bot", OwnerOnly: true, Description: "Show Go runtime memory, goroutines, and GC stats.", Execute: cmdGoStats},
+		{Name: "msgstats", Aliases: []string{"stats"}, Category: "bot", OwnerOnly: true, Description: "Show bot message/command throughput and SQLite WAL stats.", Execute: cmdMsgStats},
 	}
 	for _, c := range cmds {
 		handlers.RegisterCommand(c)

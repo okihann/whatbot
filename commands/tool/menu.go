@@ -81,7 +81,7 @@ func executeMenu(client *whatsmeow.Client, msg *events.Message, args []string) {
 		}
 		// Match a specific command name.
 		if cmd, ok := handlers.Commands[query]; ok {
-			if (cmd.Category == "owner" || cmd.OwnerOnly) && !isOwner {
+			if (cmd.Category == "owner" || cmd.Category == "bot" || cmd.OwnerOnly) && !isOwner {
 				utils.SendReply(client, msg.Info.Chat, i18n.T(lang, "menu.not_found", query, prefix))
 				return
 			}
@@ -322,10 +322,10 @@ func matchCategory(cats []string, query string) (string, bool) {
 }
 
 // menuCategories lists categories in a stable, friendly order, including
-// "owner" only when includeOwner is true.
+// "bot" and "owner" only when includeOwner is true.
 func menuCategories(includeOwner bool) []string {
 	preferred := []string{
-		"general", "main", "profile", "bot",
+		"general", "main", "profile",
 		"market", "rpg", "confess",
 		"group_admin", "group_security",
 		"downloader", "youtube", "music",
@@ -335,7 +335,7 @@ func menuCategories(includeOwner bool) []string {
 		"fun", "game", "minigame",
 	}
 	if includeOwner {
-		preferred = append(preferred, "owner")
+		preferred = append(preferred, "bot", "owner")
 	}
 
 	seen := map[string]bool{}
@@ -343,7 +343,7 @@ func menuCategories(includeOwner bool) []string {
 		if c.Category == "" {
 			continue
 		}
-		if c.Category == "owner" && !includeOwner {
+		if (c.Category == "owner" || c.Category == "bot") && !includeOwner {
 			continue
 		}
 		seen[c.Category] = true

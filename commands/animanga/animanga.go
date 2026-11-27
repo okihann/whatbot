@@ -34,17 +34,17 @@ func init() {
 		{Name: "komiku", Aliases: []string{"kiryuu", "westmanga", "bacakomik"}, Category: "animanga", Description: "Search Indonesian manga sources (MangaDex / Komiku).", Usage: ".komiku <title>", Execute: cmdMangaSearch},
 		{Name: "samehadaku", Aliases: []string{"otakudesu", "kuronime", "animasu", "sokuja", "alqanime", "kuramanime"}, Category: "animanga", Description: "Search Indonesian anime info & airing details.", Usage: ".samehadaku <title>", Execute: cmdMAL},
 
-		// Waifu & anime art gallery
-		{Name: "waifu", Category: "waifu", Description: "Fetch a random SFW waifu image.", Execute: cmdWaifuPics("waifu")},
-		{Name: "neko", Category: "waifu", Description: "Fetch a random SFW neko image.", Execute: cmdWaifuPics("neko")},
-		{Name: "kitsune", Category: "waifu", Description: "Fetch a random kitsune image.", Execute: cmdNekosBest("kitsune")},
-		{Name: "husbu", Category: "waifu", Description: "Fetch a random husbando image.", Execute: cmdNekosBest("husbando")},
-		{Name: "maid", Category: "waifu", Description: "Fetch a random anime maid image.", Execute: cmdWaifuIM("maid")},
-		{Name: "bunnygirl", Category: "waifu", Description: "Fetch a random SFW bunnygirl anime art.", Execute: cmdDanbooruTag("bunny_girl rating:general")},
-		{Name: "schoolgirl", Category: "waifu", Description: "Fetch a random SFW schoolgirl anime art.", Execute: cmdDanbooruTag("school_uniform rating:general")},
-		{Name: "swimsuit", Category: "waifu", Description: "Fetch a random SFW swimsuit anime art.", Execute: cmdDanbooruTag("swimsuit rating:general")},
-		{Name: "animewallpaper", Category: "waifu", Description: "Fetch an HD anime wallpaper.", Execute: cmdDanbooruTag("scenery highres rating:general")},
-		{Name: "danbooru", Category: "waifu", Description: "Search SFW anime art on Danbooru by tag. Usage: .danbooru <tag>", Execute: cmdDanbooruSearch},
+		// Waifu & anime art gallery (multi-provider fallback: nekos.best -> nekosia.cat -> safebooru -> konachan -> danbooru)
+		{Name: "waifu", Category: "waifu", Description: "Fetch a random SFW waifu image.", Execute: cmdAnimeGallery("Waifu", "waifu", "cute", "1girl")},
+		{Name: "neko", Category: "waifu", Description: "Fetch a random SFW neko image.", Execute: cmdAnimeGallery("Neko", "neko", "catgirl", "cat_ears")},
+		{Name: "kitsune", Category: "waifu", Description: "Fetch a random kitsune image.", Execute: cmdAnimeGallery("Kitsune", "kitsune", "foxgirl", "fox_ears")},
+		{Name: "husbu", Category: "waifu", Description: "Fetch a random husbando image.", Execute: cmdAnimeGallery("Husbando", "husbando", "", "1boy")},
+		{Name: "maid", Category: "waifu", Description: "Fetch a random anime maid image.", Execute: cmdAnimeGallery("Maid", "", "maid", "maid")},
+		{Name: "bunnygirl", Category: "waifu", Description: "Fetch a random SFW bunnygirl anime art.", Execute: cmdAnimeGallery("Bunny Girl", "", "", "bunny_girl")},
+		{Name: "schoolgirl", Category: "waifu", Description: "Fetch a random SFW schoolgirl anime art.", Execute: cmdAnimeGallery("School Girl", "", "uniform", "school_uniform")},
+		{Name: "swimsuit", Category: "waifu", Description: "Fetch a random SFW swimsuit anime art.", Execute: cmdAnimeGallery("Swimsuit", "", "", "swimsuit")},
+		{Name: "animewallpaper", Category: "waifu", Description: "Fetch an HD anime wallpaper.", Execute: cmdAnimeGallery("Anime Wallpaper", "", "", "scenery")},
+		{Name: "danbooru", Category: "waifu", Description: "Search SFW anime art on Danbooru/Safebooru by tag. Usage: .danbooru <tag>", Execute: cmdDanbooruSearch},
 		{Name: "zerochan", Category: "waifu", Description: "Search anime art by character/tag.", Usage: ".zerochan <tag>", Execute: cmdDanbooruSearch},
 	}
 	for _, c := range cmds {
@@ -266,98 +266,164 @@ func cmdMangaSearch(client *whatsmeow.Client, msg *events.Message, args []string
 	utils.SendReply(client, msg.Info.Chat, strings.TrimSpace(b.String()))
 }
 
-func cmdWaifuPics(category string) func(*whatsmeow.Client, *events.Message, []string) {
-	return func(client *whatsmeow.Client, msg *events.Message, args []string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		var resp struct {
-			URL string `json:"url"`
-		}
-		if err := utils.HTTPGetJSON(ctx, "https://api.waifu.pics/sfw/"+category, nil, &resp); err != nil || resp.URL == "" {
-			utils.SendReply(client, msg.Info.Chat, "❌ Could not fetch "+category+" image.")
-			return
-		}
-		img, ct, err := utils.DownloadHTTPBytes(ctx, resp.URL, nil)
-		if err != nil {
-			utils.SendReply(client, msg.Info.Chat, "🌸 "+resp.URL)
-			return
-		}
-		_, _ = utils.SendImageData(ctx, client, msg.Info.Chat, img, ct, "🌸 "+handlers.Title(category))
-	}
+var animangaHeaders = map[string]string{
+	"User-Agent": "NopeBot/1.0 (+https://github.com/okihann/whatbot)",
 }
 
-func cmdNekosBest(category string) func(*whatsmeow.Client, *events.Message, []string) {
-	return func(client *whatsmeow.Client, msg *events.Message, args []string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		var resp struct {
-			Results []struct {
-				URL        string `json:"url"`
-				ArtistName string `json:"artist_name"`
-			} `json:"results"`
-		}
-		if err := utils.HTTPGetJSON(ctx, "https://nekos.best/api/v2/"+category, nil, &resp); err != nil || len(resp.Results) == 0 {
-			utils.SendReply(client, msg.Info.Chat, "❌ Could not fetch "+category+".")
-			return
-		}
-		r := resp.Results[0]
-		img, ct, err := utils.DownloadHTTPBytes(ctx, r.URL, nil)
-		if err != nil {
-			utils.SendReply(client, msg.Info.Chat, "🌸 "+r.URL)
-			return
-		}
-		_, _ = utils.SendImageData(ctx, client, msg.Info.Chat, img, ct, fmt.Sprintf("🌸 %s (Artist: %s)", handlers.Title(category), r.ArtistName))
-	}
+type animeImageResult struct {
+	URL    string
+	Artist string
+	Source string
 }
 
-func cmdWaifuIM(tag string) func(*whatsmeow.Client, *events.Message, []string) {
-	return func(client *whatsmeow.Client, msg *events.Message, args []string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		var resp struct {
-			Images []struct {
+func fetchNekosBest(ctx context.Context, category string) (*animeImageResult, error) {
+	if category == "" {
+		return nil, fmt.Errorf("empty category")
+	}
+	var resp struct {
+		Results []struct {
+			URL        string `json:"url"`
+			ArtistName string `json:"artist_name"`
+		} `json:"results"`
+	}
+	if err := utils.HTTPGetJSON(ctx, "https://nekos.best/api/v2/"+url.PathEscape(category), animangaHeaders, &resp); err != nil {
+		return nil, err
+	}
+	if len(resp.Results) == 0 || resp.Results[0].URL == "" {
+		return nil, fmt.Errorf("empty nekos.best result")
+	}
+	return &animeImageResult{
+		URL:    resp.Results[0].URL,
+		Artist: resp.Results[0].ArtistName,
+		Source: "nekos.best",
+	}, nil
+}
+
+func fetchNekosia(ctx context.Context, category string) (*animeImageResult, error) {
+	if category == "" {
+		return nil, fmt.Errorf("empty category")
+	}
+	var resp struct {
+		Success bool `json:"success"`
+		Image   struct {
+			Original struct {
 				URL string `json:"url"`
-			} `json:"images"`
-		}
-		if err := utils.HTTPGetJSON(ctx, "https://api.waifu.im/search?is_nsfw=false&included_tags="+url.QueryEscape(tag), nil, &resp); err != nil || len(resp.Images) == 0 {
-			cmdDanbooruTag(tag+" rating:general")(client, msg, args)
-			return
-		}
-		img, ct, err := utils.DownloadHTTPBytes(ctx, resp.Images[0].URL, nil)
-		if err != nil {
-			utils.SendReply(client, msg.Info.Chat, "🌸 "+resp.Images[0].URL)
-			return
-		}
-		_, _ = utils.SendImageData(ctx, client, msg.Info.Chat, img, ct, "🌸 "+handlers.Title(tag))
+			} `json:"original"`
+			Compressed struct {
+				URL string `json:"url"`
+			} `json:"compressed"`
+		} `json:"image"`
+		Attribution struct {
+			Artist struct {
+				Username string `json:"username"`
+			} `json:"artist"`
+		} `json:"attribution"`
 	}
+	if err := utils.HTTPGetJSON(ctx, "https://api.nekosia.cat/api/v1/images/"+url.PathEscape(category), animangaHeaders, &resp); err != nil {
+		return nil, err
+	}
+	u := resp.Image.Compressed.URL
+	if u == "" {
+		u = resp.Image.Original.URL
+	}
+	if u == "" {
+		return nil, fmt.Errorf("empty nekosia image")
+	}
+	return &animeImageResult{
+		URL:    u,
+		Artist: resp.Attribution.Artist.Username,
+		Source: "nekosia.cat",
+	}, nil
 }
 
-func cmdDanbooruTag(tags string) func(*whatsmeow.Client, *events.Message, []string) {
-	return func(client *whatsmeow.Client, msg *events.Message, args []string) {
-		fetchDanbooru(client, msg, tags)
-	}
-}
-
-func cmdDanbooruSearch(client *whatsmeow.Client, msg *events.Message, args []string) {
-	tag := strings.TrimSpace(strings.Join(args, "_"))
+func fetchSafebooru(ctx context.Context, tag string) (*animeImageResult, error) {
 	if tag == "" {
-		tag = "1girl"
+		return nil, fmt.Errorf("empty tag")
 	}
-	fetchDanbooru(client, msg, tag+" rating:general")
+	var posts []struct {
+		Directory string `json:"directory"`
+		Image     string `json:"image"`
+		FileURL   string `json:"file_url"`
+	}
+	// Randomize page slightly so repeated calls return fresh art.
+	pid := rand.Intn(4)
+	apiURL := fmt.Sprintf("https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&limit=20&pid=%d&tags=%s", pid, url.QueryEscape(tag))
+	if err := utils.HTTPGetJSON(ctx, apiURL, animangaHeaders, &posts); err != nil || len(posts) == 0 {
+		if pid > 0 {
+			apiURL = fmt.Sprintf("https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&limit=20&tags=%s", url.QueryEscape(tag))
+			if err2 := utils.HTTPGetJSON(ctx, apiURL, animangaHeaders, &posts); err2 != nil || len(posts) == 0 {
+				return nil, fmt.Errorf("safebooru empty")
+			}
+		} else {
+			return nil, fmt.Errorf("safebooru empty")
+		}
+	}
+	var valid []string
+	for _, p := range posts {
+		u := p.FileURL
+		if u == "" && p.Directory != "" && p.Image != "" {
+			u = fmt.Sprintf("https://safebooru.org/images/%s/%s", p.Directory, p.Image)
+		}
+		lower := strings.ToLower(u)
+		if strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".png") {
+			valid = append(valid, u)
+		}
+	}
+	if len(valid) == 0 {
+		return nil, fmt.Errorf("no valid safebooru images")
+	}
+	return &animeImageResult{
+		URL:    valid[rand.Intn(len(valid))],
+		Source: "safebooru",
+	}, nil
 }
 
-func fetchDanbooru(client *whatsmeow.Client, msg *events.Message, tags string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
+func fetchKonachan(ctx context.Context, tag string) (*animeImageResult, error) {
+	if tag == "" {
+		return nil, fmt.Errorf("empty tag")
+	}
+	var posts []struct {
+		SampleURL string `json:"sample_url"`
+		FileURL   string `json:"file_url"`
+		Author    string `json:"author"`
+	}
+	q := "rating:safe " + tag
+	apiURL := "https://konachan.net/post.json?limit=20&tags=" + url.QueryEscape(q)
+	if err := utils.HTTPGetJSON(ctx, apiURL, animangaHeaders, &posts); err != nil || len(posts) == 0 {
+		return nil, fmt.Errorf("konachan empty")
+	}
+	var valid []animeImageResult
+	for _, p := range posts {
+		u := p.SampleURL
+		if u == "" {
+			u = p.FileURL
+		}
+		lower := strings.ToLower(u)
+		if strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".png") {
+			valid = append(valid, animeImageResult{URL: u, Artist: p.Author, Source: "konachan"})
+		}
+	}
+	if len(valid) == 0 {
+		return nil, fmt.Errorf("no valid konachan images")
+	}
+	pick := valid[rand.Intn(len(valid))]
+	return &pick, nil
+}
+
+func fetchDanbooruResult(ctx context.Context, tag string) (*animeImageResult, error) {
+	if tag == "" {
+		return nil, fmt.Errorf("empty tag")
+	}
+	// Anonymous Danbooru limits queries to 2 tags max, so take only the primary tag + rating:general.
+	firstTag := strings.Fields(tag)[0]
+	tags := firstTag + " rating:general"
 	var posts []struct {
 		FileURL      string `json:"file_url"`
 		LargeFileURL string `json:"large_file_url"`
-		TagString    string `json:"tag_string_character"`
 	}
 	apiURL := "https://danbooru.donmai.us/posts.json?limit=15&tags=" + url.QueryEscape(tags)
-	if err := utils.HTTPGetJSON(ctx, apiURL, nil, &posts); err != nil || len(posts) == 0 {
-		utils.SendReply(client, msg.Info.Chat, "❌ No artwork found for `"+tags+"`.")
-		return
+	if err := utils.HTTPGetJSON(ctx, apiURL, animangaHeaders, &posts); err != nil || len(posts) == 0 {
+		return nil, fmt.Errorf("danbooru empty")
 	}
 	var valid []string
 	for _, p := range posts {
@@ -365,19 +431,92 @@ func fetchDanbooru(client *whatsmeow.Client, msg *events.Message, tags string) {
 		if u == "" {
 			u = p.FileURL
 		}
-		if strings.HasSuffix(strings.ToLower(u), ".jpg") || strings.HasSuffix(strings.ToLower(u), ".png") || strings.HasSuffix(strings.ToLower(u), ".jpeg") {
+		lower := strings.ToLower(u)
+		if strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".png") {
 			valid = append(valid, u)
 		}
 	}
 	if len(valid) == 0 {
-		utils.SendReply(client, msg.Info.Chat, "❌ No image results available.")
-		return
+		return nil, fmt.Errorf("no valid danbooru images")
 	}
-	pick := valid[rand.Intn(len(valid))]
-	img, ct, err := utils.DownloadHTTPBytes(ctx, pick, nil)
+	return &animeImageResult{
+		URL:    valid[rand.Intn(len(valid))],
+		Source: "danbooru",
+	}, nil
+}
+
+func sendAnimeGalleryResult(ctx context.Context, client *whatsmeow.Client, msg *events.Message, title string, res *animeImageResult) {
+	caption := "🌸 *" + title + "*"
+	if res.Artist != "" {
+		caption += fmt.Sprintf("\n🎨 Artist: %s", res.Artist)
+	}
+	if res.Source != "" {
+		caption += fmt.Sprintf(" • _%s_", res.Source)
+	}
+	img, ct, err := utils.DownloadHTTPBytes(ctx, res.URL, animangaHeaders)
 	if err != nil {
-		utils.SendReply(client, msg.Info.Chat, "🎨 "+pick)
+		utils.SendReply(client, msg.Info.Chat, caption+"\n"+res.URL)
 		return
 	}
-	_, _ = utils.SendImageData(ctx, client, msg.Info.Chat, img, ct, "🎨 "+tags)
+	_, _ = utils.SendImageData(ctx, client, msg.Info.Chat, img, ct, caption)
+}
+
+func cmdAnimeGallery(title, nekosCat, nekosiaCat, booruTag string) func(*whatsmeow.Client, *events.Message, []string) {
+	return func(client *whatsmeow.Client, msg *events.Message, args []string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+
+		var res *animeImageResult
+		var err error
+		if nekosCat != "" {
+			if res, err = fetchNekosBest(ctx, nekosCat); err == nil && res != nil {
+				sendAnimeGalleryResult(ctx, client, msg, title, res)
+				return
+			}
+		}
+		if nekosiaCat != "" {
+			if res, err = fetchNekosia(ctx, nekosiaCat); err == nil && res != nil {
+				sendAnimeGalleryResult(ctx, client, msg, title, res)
+				return
+			}
+		}
+		if booruTag != "" {
+			if res, err = fetchSafebooru(ctx, booruTag); err == nil && res != nil {
+				sendAnimeGalleryResult(ctx, client, msg, title, res)
+				return
+			}
+			if res, err = fetchKonachan(ctx, booruTag); err == nil && res != nil {
+				sendAnimeGalleryResult(ctx, client, msg, title, res)
+				return
+			}
+			if res, err = fetchDanbooruResult(ctx, booruTag); err == nil && res != nil {
+				sendAnimeGalleryResult(ctx, client, msg, title, res)
+				return
+			}
+		}
+		utils.SendReply(client, msg.Info.Chat, "❌ Could not fetch "+strings.ToLower(title)+" image right now. Please try again.")
+	}
+}
+
+func cmdDanbooruSearch(client *whatsmeow.Client, msg *events.Message, args []string) {
+	tag := strings.ToLower(strings.TrimSpace(strings.Join(args, "_")))
+	if tag == "" {
+		tag = "1girl"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	if res, err := fetchDanbooruResult(ctx, tag); err == nil && res != nil {
+		sendAnimeGalleryResult(ctx, client, msg, tag, res)
+		return
+	}
+	if res, err := fetchSafebooru(ctx, tag); err == nil && res != nil {
+		sendAnimeGalleryResult(ctx, client, msg, tag, res)
+		return
+	}
+	if res, err := fetchKonachan(ctx, tag); err == nil && res != nil {
+		sendAnimeGalleryResult(ctx, client, msg, tag, res)
+		return
+	}
+	utils.SendReply(client, msg.Info.Chat, "❌ No artwork found for `"+tag+"`.")
 }

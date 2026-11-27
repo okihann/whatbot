@@ -15,8 +15,8 @@ func TestHelpAndMenuRegistrationAndRendering(t *testing.T) {
 
 	userCats := menuCategories(false)
 	for _, c := range userCats {
-		if c == "owner" {
-			t.Fatalf("non-owner menu must not expose owner category")
+		if c == "owner" || c == "bot" {
+			t.Fatalf("non-owner menu must not expose %q category", c)
 		}
 	}
 	// Verify all user categories (including previously skipped 'tools') are present.
