@@ -161,12 +161,103 @@ func ResolveLIDStatusRecipients(
 	return recipients, nil
 }
 
+func isHostedStatusDevice(j waTypes.JID) bool {
+	return j.Server == waTypes.HostedServer ||
+		j.Server == waTypes.HostedLIDServer ||
+		j.Device == 99
+}
+
 func filterLIDStatusDevices(devices []waTypes.JID) []waTypes.JID {
 	return slices.DeleteFunc(slices.Clone(devices), func(j waTypes.JID) bool {
-		return j.Server != waTypes.HiddenUserServer ||
-			j.Server == waTypes.HostedServer ||
-			j.Server == waTypes.HostedLIDServer
+		return j.Server != waTypes.HiddenUserServer || isHostedStatusDevice(j)
 	})
+}
+
+type statusDeviceKey struct {
+	User   string
+	Server string
+	Device uint16
+}
+
+// mergeStatusDevices combines filtered contact LID devices with all of the
+// sender's own devices projected onto ownLID.
+//
+// WhatsApp's usync device query frequently returns empty or PN-only entries
+// when querying your own @lid directly, causing the user's primary phone
+// (ownLID:0@lid) to be omitted from <participants> so companion-posted statuses
+// never appear under "My Status". Projecting own devices (fetched via own PN)
+// onto ownLID and unconditionally guaranteeing primary device 0 ensures the
+// status always appears on the owner's phone and other linked devices.
+func mergeStatusDevices(contactRawDevices, ownRawDevices []waTypes.JID, ownLID waTypes.JID) (allDevices []waTypes.JID, ownTargetDeviceIDs []uint16) {
+	seen := make(map[statusDeviceKey]struct{}, len(contactRawDevices)+len(ownRawDevices)+2)
+	add := func(j waTypes.JID) {
+		if j.User == "" || j.Server != waTypes.HiddenUserServer || isHostedStatusDevice(j) {
+			return
+		}
+		k := statusDeviceKey{User: j.User, Server: j.Server, Device: j.Device}
+		if _, exists := seen[k]; exists {
+			return
+		}
+		seen[k] = struct{}{}
+		allDevices = append(allDevices, waTypes.JID{
+			User:   j.User,
+			Device: j.Device,
+			Server: waTypes.HiddenUserServer,
+		})
+	}
+
+	for _, d := range contactRawDevices {
+		if d.Server == waTypes.HiddenUserServer && !isHostedStatusDevice(d) {
+			add(d)
+		}
+	}
+
+	if !ownLID.IsEmpty() && ownLID.Server == waTypes.HiddenUserServer {
+		// Unconditionally include primary phone (Device 0) so the status always
+		// appears under "My Status" on the owner's main phone.
+		add(waTypes.JID{
+			User:   ownLID.User,
+			Device: 0,
+			Server: waTypes.HiddenUserServer,
+		})
+		// Project every discovered own device (from PN or LID usync) onto ownLID.
+		for _, d := range ownRawDevices {
+			if isHostedStatusDevice(d) {
+				continue
+			}
+			add(waTypes.JID{
+				User:   ownLID.User,
+				Device: d.Device,
+				Server: waTypes.HiddenUserServer,
+			})
+		}
+		// Include the sending device itself so phash covers the full device set
+		// (EncryptMessageForDevices skips ownLID automatically when encrypting SKDMs).
+		add(waTypes.JID{
+			User:   ownLID.User,
+			Device: ownLID.Device,
+			Server: waTypes.HiddenUserServer,
+		})
+
+		for _, d := range allDevices {
+			if d.User == ownLID.User && d.Device != ownLID.Device {
+				ownTargetDeviceIDs = append(ownTargetDeviceIDs, d.Device)
+			}
+		}
+		slices.Sort(ownTargetDeviceIDs)
+	}
+	return allDevices, ownTargetDeviceIDs
+}
+
+func statusPrivacySettingAttr(privType waTypes.StatusPrivacyType) string {
+	switch privType {
+	case waTypes.StatusPrivacyTypeWhitelist:
+		return "allowlist"
+	case waTypes.StatusPrivacyTypeBlacklist:
+		return "denylist"
+	default:
+		return "contacts"
+	}
 }
 
 func statusParticipantListHashV2(participants []waTypes.JID) string {
@@ -296,12 +387,37 @@ func SendStatusBroadcast(ctx context.Context, client *whatsmeow.Client, msg *waE
 	}
 	ciphertext := encrypted.SignedSerialize()
 
-	// 4. Resolve recipient devices and drop any non-LID or Hosted devices.
-	rawDevices, err := client.GetUserDevices(ctx, recipients)
-	if err != nil {
-		return whatsmeow.SendResponse{}, fmt.Errorf("failed to get status recipient devices: %w", err)
+	// 4. Resolve recipient devices:
+	//    - Third-party contacts are queried via @lid (PN usync returns empty for LID contacts).
+	//    - Own devices are queried via own PN (@s.whatsapp.net) + own LID and projected onto
+	//      ownLID with primary device 0 guaranteed, so the status always appears under "My Status".
+	contactRecipients := make([]waTypes.JID, 0, len(recipients))
+	for _, r := range recipients {
+		if r.User != ownLID.User {
+			contactRecipients = append(contactRecipients, r)
+		}
 	}
-	allDevices := filterLIDStatusDevices(rawDevices)
+
+	var contactRawDevices []waTypes.JID
+	if len(contactRecipients) > 0 {
+		contactRawDevices, err = client.GetUserDevices(ctx, contactRecipients)
+		if err != nil {
+			return whatsmeow.SendResponse{}, fmt.Errorf("failed to get status recipient devices: %w", err)
+		}
+	}
+
+	var ownRawDevices []waTypes.JID
+	ownPN := internals.GetOwnID().ToNonAD()
+	if !ownPN.IsEmpty() {
+		if devs, ownErr := client.GetUserDevices(ctx, []waTypes.JID{ownPN}); ownErr == nil {
+			ownRawDevices = append(ownRawDevices, devs...)
+		}
+	}
+	if devs, ownErr := client.GetUserDevices(ctx, []waTypes.JID{ownLID.ToNonAD()}); ownErr == nil {
+		ownRawDevices = append(ownRawDevices, devs...)
+	}
+
+	allDevices, ownDeviceIDs := mergeStatusDevices(contactRawDevices, ownRawDevices, ownLID)
 
 	encAttrs := waBinary.Attrs{}
 	msgType := "text"
@@ -314,7 +430,8 @@ func SendStatusBroadcast(ctx context.Context, client *whatsmeow.Client, msg *waE
 		"type": msgType,
 		"to":   to,
 	}
-	if msg.ProtocolMessage != nil && msg.ProtocolMessage.GetType() == waE2E.ProtocolMessage_REVOKE {
+	isRevoke := msg.ProtocolMessage != nil && msg.ProtocolMessage.GetType() == waE2E.ProtocolMessage_REVOKE
+	if isRevoke {
 		attrs["edit"] = string(waTypes.EditAttributeSenderRevoke)
 		encAttrs["decrypt-fail"] = string(events.DecryptFailHide)
 	}
@@ -322,6 +439,22 @@ func SendStatusBroadcast(ctx context.Context, client *whatsmeow.Client, msg *waE
 	participantNodes, includeIdentity, err := internals.EncryptMessageForDevices(ctx, allDevices, msgID, skdPlaintext, nil, encAttrs)
 	if err != nil {
 		return whatsmeow.SendResponse{}, fmt.Errorf("encrypt SKDM for status devices: %w", err)
+	}
+
+	ownPrimary := waTypes.JID{User: ownLID.User, Device: 0, Server: waTypes.HiddenUserServer}
+	ownPrimaryEncrypted := false
+	for _, pn := range participantNodes {
+		if j, ok := pn.Attrs["jid"].(waTypes.JID); ok && j.User == ownLID.User && j.Device == 0 {
+			ownPrimaryEncrypted = true
+			break
+		}
+	}
+	if !ownPrimaryEncrypted && ownLID.Device != 0 {
+		fmt.Printf("⚠️ [STATUS] primary phone %s was not encrypted in SKDM fanout — adding bare participant fallback\n", ownPrimary)
+		participantNodes = append(participantNodes, waBinary.Node{
+			Tag:   "to",
+			Attrs: waBinary.Attrs{"jid": ownPrimary},
+		})
 	}
 
 	phash := statusParticipantListHashV2(allDevices)
@@ -346,6 +479,13 @@ func SendStatusBroadcast(ctx context.Context, client *whatsmeow.Client, msg *waE
 	if internals.ShouldIncludeReportingToken(msg) && len(msg.GetMessageContextInfo().GetMessageSecret()) > 0 {
 		content = append(content, internals.GetMessageReportingToken(plaintext, msg, ownLID, to, msgID))
 	}
+	// Attach <meta status_setting="..."/> on actual status posts (omitted on revokes/reactions per WA Web).
+	if !isRevoke && msg.ReactionMessage == nil {
+		content = append(content, waBinary.Node{
+			Tag:   "meta",
+			Attrs: waBinary.Attrs{"status_setting": statusPrivacySettingAttr(priv.Type)},
+		})
+	}
 
 	node := waBinary.Node{
 		Tag:     "message",
@@ -354,6 +494,9 @@ func SendStatusBroadcast(ctx context.Context, client *whatsmeow.Client, msg *waE
 	}
 
 	_ = internals.AddRecentMessage(ctx, to, msgID, msg, nil)
+	if client.Store.MsgSecrets != nil && len(msg.GetMessageContextInfo().GetMessageSecret()) > 0 {
+		_ = client.Store.MsgSecrets.PutMessageSecret(ctx, to, ownLID, msgID, msg.GetMessageContextInfo().GetMessageSecret())
+	}
 	respChan := internals.WaitResponse(msgID)
 	if _, err := internals.SendNodeAndGetData(ctx, node); err != nil {
 		internals.CancelResponse(msgID, respChan)
@@ -378,12 +521,15 @@ func SendStatusBroadcast(ctx context.Context, client *whatsmeow.Client, msg *waE
 		ServerID:  waTypes.MessageServerID(ag.OptionalInt("server_id")),
 	}
 	if errCode := ag.Int("error"); errCode != 0 {
-		fmt.Printf("⚠️ [STATUS] server error %d (privacy=%s lidRecipients=%d devices=%d type=%s media=%s)\n",
-			errCode, priv.Type, len(recipients), len(allDevices), msgType, mediaType)
+		fmt.Printf("⚠️ [STATUS] server error %d (privacy=%s lidRecipients=%d devices=%d ownDevices=%v ownPrimary=%v type=%s media=%s)\n",
+			errCode, priv.Type, len(recipients), len(allDevices), ownDeviceIDs, ownPrimaryEncrypted, msgType, mediaType)
 		return resp, fmt.Errorf("%w %d", whatsmeow.ErrServerReturnedError, errCode)
 	}
-	fmt.Printf("✅ [STATUS] posted %s via LID (privacy=%s recipients=%d devices=%d reshareable=true)\n",
-		msgID, priv.Type, len(recipients), len(allDevices))
+	if expectedPHash := ag.OptionalString("phash"); expectedPHash != "" && expectedPHash != phash {
+		fmt.Printf("⚠️ [STATUS] server returned different phash (%s != %s) for %s\n", phash, expectedPHash, msgID)
+	}
+	fmt.Printf("✅ [STATUS] posted %s via LID (privacy=%s setting=%s recipients=%d devices=%d ownDevices=%v ownPrimary=%v reshareable=true)\n",
+		msgID, priv.Type, statusPrivacySettingAttr(priv.Type), len(recipients), len(allDevices), ownDeviceIDs, ownPrimaryEncrypted)
 	return resp, nil
 }
 

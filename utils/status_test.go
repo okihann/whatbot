@@ -132,15 +132,73 @@ func TestApplyStatusReshareableAndHostedDeviceFilter(t *testing.T) {
 		t.Fatalf("expected ImageMessage CanBeReshared=true")
 	}
 
-	// Hosted and PN devices must be stripped from LID status device list
+	// Hosted, Device 99, and PN devices must be stripped from LID status device list
 	devs := []waTypes.JID{
 		{User: "1001", Device: 0, Server: waTypes.HiddenUserServer},
+		{User: "1001", Device: 99, Server: waTypes.HiddenUserServer},
 		{User: "1001", Device: 99, Server: waTypes.HostedLIDServer},
 		{User: "628111", Device: 0, Server: waTypes.DefaultUserServer},
 		{User: "628111", Device: 99, Server: waTypes.HostedServer},
 	}
 	filtered := filterLIDStatusDevices(devs)
-	if len(filtered) != 1 || filtered[0].Server != waTypes.HiddenUserServer {
+	if len(filtered) != 1 || filtered[0].Server != waTypes.HiddenUserServer || filtered[0].Device != 0 {
 		t.Fatalf("expected only 1 non-hosted LID device, got %v", filtered)
+	}
+}
+
+func TestMergeStatusDevicesIncludesOwnPrimaryPhone(t *testing.T) {
+	ownLID := waTypes.JID{User: "9990001", Device: 25, Server: waTypes.HiddenUserServer}
+	contactDevs := []waTypes.JID{
+		{User: "10000001", Device: 0, Server: waTypes.HiddenUserServer},
+		{User: "10000001", Device: 2, Server: waTypes.HiddenUserServer},
+		{User: "10000001", Device: 99, Server: waTypes.HostedLIDServer},
+		{User: "6281110001", Device: 0, Server: waTypes.DefaultUserServer},
+	}
+
+	// Case 1: usync returned empty for own account -> primary phone (Device 0) MUST still be included!
+	allEmpty, ownIDsEmpty := mergeStatusDevices(contactDevs, nil, ownLID)
+	if len(ownIDsEmpty) != 1 || ownIDsEmpty[0] != 0 {
+		t.Fatalf("expected own primary device [0] even when usync empty, got %v", ownIDsEmpty)
+	}
+	// Expect: 2 contact devices + ownLID:0 + ownLID:25 (for phash) = 4 pure @lid devices
+	if len(allEmpty) != 4 {
+		t.Fatalf("expected 4 merged LID devices, got %d: %v", len(allEmpty), allEmpty)
+	}
+	for _, d := range allEmpty {
+		if d.Server != waTypes.HiddenUserServer {
+			t.Fatalf("unexpected non-LID device in merged list: %s", d)
+		}
+	}
+
+	// Case 2: usync returned PN own devices (0 = phone, 12 = WhatsApp Web, 25 = bot, 99 = hosted)
+	ownPNDevs := []waTypes.JID{
+		{User: "6289999999", Device: 0, Server: waTypes.DefaultUserServer},
+		{User: "6289999999", Device: 12, Server: waTypes.DefaultUserServer},
+		{User: "6289999999", Device: 25, Server: waTypes.DefaultUserServer},
+		{User: "6289999999", Device: 99, Server: waTypes.HostedServer},
+	}
+	allProjected, ownIDs := mergeStatusDevices(contactDevs, ownPNDevs, ownLID)
+	if len(ownIDs) != 2 || ownIDs[0] != 0 || ownIDs[1] != 12 {
+		t.Fatalf("expected own target devices [0 12] (excluding bot 25 and hosted 99), got %v", ownIDs)
+	}
+	// Expect: 2 contact devices + ownLID:0 + ownLID:12 + ownLID:25 = 5 deduplicated @lid devices
+	if len(allProjected) != 5 {
+		t.Fatalf("expected 5 deduplicated LID devices, got %d: %v", len(allProjected), allProjected)
+	}
+	for _, d := range allProjected {
+		if d.Server != waTypes.HiddenUserServer || d.Device == 99 {
+			t.Fatalf("invalid device in merged status list: %s", d)
+		}
+	}
+
+	// Privacy setting attribute mapping matches WA Web's <meta status_setting="..."/>
+	if got := statusPrivacySettingAttr(waTypes.StatusPrivacyTypeContacts); got != "contacts" {
+		t.Fatalf("expected contacts, got %q", got)
+	}
+	if got := statusPrivacySettingAttr(waTypes.StatusPrivacyTypeWhitelist); got != "allowlist" {
+		t.Fatalf("expected allowlist, got %q", got)
+	}
+	if got := statusPrivacySettingAttr(waTypes.StatusPrivacyTypeBlacklist); got != "denylist" {
+		t.Fatalf("expected denylist, got %q", got)
 	}
 }
