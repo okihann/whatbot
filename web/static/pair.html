@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pair Your WhatsApp Bot — Android Companion</title>
+<style>
+  :root {
+    --bg: #0b141a;
+    --card: #111b21;
+    --header: #202c33;
+    --border: #222e35;
+    --text: #e9edef;
+    --muted: #8696a0;
+    --accent: #00a884;
+    --accent2: #25d366;
+    --danger: #f15c6d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .card {
+    width: 100%;
+    max-width: 440px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.45);
+  }
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  h1 { font-size: 19px; font-weight: 700; }
+  .pill {
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(37,211,102,0.14);
+    color: var(--accent2);
+    border: 1px solid rgba(37,211,102,0.35);
+    white-space: nowrap;
+  }
+  .desc { font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .qr-box {
+    background: #fff;
+    border-radius: 14px;
+    min-height: 270px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    color: #111;
+    text-align: center;
+    gap: 8px;
+  }
+  .qr-box img { width: 240px; height: 240px; image-rendering: pixelated; }
+  .status-bar {
+    background: var(--header);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .status-title { font-weight: 700; font-size: 14px; color: var(--accent2); }
+  .status-title.warn { color: #f6c453; }
+  .status-title.err { color: var(--danger); }
+  .status-sub { font-size: 12.5px; color: var(--muted); }
+  .steps { font-size: 12.5px; color: var(--muted); padding-left: 18px; line-height: 1.6; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="top">
+      <h1 id="title">WhatsApp Bot Pairing</h1>
+      <span class="pill">Android Companion</span>
+    </div>
+    <p class="desc">Sequential QR pairing queue: only one device pairs at a time so your session links cleanly with View-Once compatibility.</p>
+
+    <div class="qr-box" id="qrBox">
+      <div style="font-size:32px;">⏳</div>
+      <div style="font-weight:600;">Checking your queue position...</div>
+    </div>
+
+    <div class="status-bar">
+      <div class="status-title" id="statusTitle">Connecting...</div>
+      <div class="status-sub" id="statusSub">Please keep this tab open.</div>
+    </div>
+
+    <ol class="steps">
+      <li>Open <strong>WhatsApp</strong> on your phone.</li>
+      <li>Tap <strong>Menu / Settings → Linked Devices → Link a Device</strong>.</li>
+      <li>When your QR appears above, scan it before the countdown expires.</li>
+    </ol>
+  </div>
+
+<script>
+(() => {
+  const parts = location.pathname.split('/').filter(Boolean);
+  const token = parts[parts.length - 1] || '';
+  let lastQRAt = 0;
+
+  async function poll() {
+    if (!token) {
+      document.getElementById('statusTitle').textContent = 'Invalid pairing link';
+      document.getElementById('statusTitle').className = 'status-title err';
+      return;
+    }
+    try {
+      const res = await fetch(`/api/wa/pair/${encodeURIComponent(token)}/status`);
+      if (!res.ok) {
+        document.getElementById('statusTitle').textContent = 'Ticket not found or expired';
+        document.getElementById('statusTitle').className = 'status-title err';
+        document.getElementById('qrBox').innerHTML = '<div style="font-size:34px;">❌</div><div>Invalid or expired pairing ticket.</div>';
+        return;
+      }
+      const t = await res.json();
+      if (t.label) document.getElementById('title').textContent = `Pair: ${t.label}`;
+
+      const stTitle = document.getElementById('statusTitle');
+      const stSub = document.getElementById('statusSub');
+      const box = document.getElementById('qrBox');
+
+      if (t.status === 'queued') {
+        stTitle.textContent = `Waiting in Queue — Position #${t.position + 1}`;
+        stTitle.className = 'status-title warn';
+        stSub.textContent = 'Another buyer is currently scanning. Your QR will appear automatically as soon as it is your turn.';
+        box.innerHTML = `<div style="font-size:40px;">🎟️</div><div style="font-size:18px;font-weight:700;">Queue Position #${t.position + 1}</div><div style="font-size:12px;color:#555;">Stay on this page — auto-updating...</div>`;
+      } else if (t.status === 'pairing') {
+        const rem = t.deadlineUnix ? Math.max(0, t.deadlineUnix - Math.floor(Date.now() / 1000)) : 0;
+        stTitle.textContent = `Your Turn! Scan QR (${rem}s left)`;
+        stTitle.className = 'status-title';
+        stSub.textContent = 'Scan with WhatsApp → Linked Devices now.';
+        if (t.qrAvailable) {
+          if (t.qrUpdatedAt !== lastQRAt) {
+            lastQRAt = t.qrUpdatedAt;
+            box.innerHTML = `<img src="/api/wa/pair/${encodeURIComponent(token)}/qr.png?t=${t.qrUpdatedAt}" alt="WhatsApp QR Code">`;
+          }
+        } else {
+          box.innerHTML = '<div style="font-size:32px;">🔄</div><div style="font-weight:600;">Generating fresh QR code...</div>';
+        }
+      } else if (t.status === 'connected') {
+        stTitle.textContent = `✅ Connected (${t.accountId || 'Bot Active'})`;
+        stTitle.className = 'status-title';
+        stSub.textContent = t.durationDays > 0
+          ? `Your bot is now live for ${t.durationDays} days! You can close this page.`
+          : 'Your bot is now live! You can close this page.';
+        box.innerHTML = '<div style="font-size:52px;">✅</div><div style="font-size:17px;font-weight:700;color:#008069;">Bot Successfully Linked!</div>';
+        return; // stop polling
+      } else {
+        stTitle.textContent = `Pairing ${t.status}`;
+        stTitle.className = 'status-title err';
+        stSub.textContent = t.errorMsg || 'Please ask the admin for a fresh pairing ticket.';
+        box.innerHTML = `<div style="font-size:42px;">⚠️</div><div style="font-weight:700;">Ticket ${t.status}</div>`;
+        return;
+      }
+    } catch (e) {
+      document.getElementById('statusSub').textContent = 'Reconnecting...';
+    }
+    setTimeout(poll, 1200);
+  }
+
+  poll();
+})();
+</script>
+</body>
+</html>

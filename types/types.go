@@ -7,8 +7,15 @@ import (
 
 type Command struct {
 	Name        string
+	Aliases     []string
 	Description string
+	Usage       string
 	Category    string
+	GroupOnly   bool
+	AdminOnly   bool
+	BotAdmin    bool
+	OwnerOnly   bool
+	NSFW        bool
 	Execute     func(client *whatsmeow.Client, msg *events.Message, args []string)
 }
 

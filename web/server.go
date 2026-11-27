@@ -14,6 +14,7 @@ import (
 	"time"
 
 	db "bot/databases"
+	"bot/pairing"
 	"bot/utils"
 
 	"go.mau.fi/whatsmeow"
@@ -26,14 +27,28 @@ import (
 //go:embed static/index.html
 var indexHTML []byte
 
-// Mount registers the WhatsApp Web UI and Android Companion REST/SSE API onto mux.
+//go:embed static/pair.html
+var pairHTML []byte
+
+//go:embed static/games.html
+var gamesHTML []byte
+
+// Mount registers the WhatsApp Web UI, Sequential QR Pairing Queue, Arcade Games, and REST/SSE API onto mux.
 func (h *Hub) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/", h.handleIndex)
+	mux.HandleFunc("/pair/", h.handlePairPage)
+	mux.HandleFunc("/games", h.handleGamesPage)
+	mux.HandleFunc("/games/", h.handleGamesPage)
 	mux.HandleFunc("/api/wa/status", h.handleStatus)
 	mux.HandleFunc("/api/wa/accounts", h.requireAuth(h.handleAccounts))
 	mux.HandleFunc("/api/wa/accounts/add", h.requireAuth(h.handleAddAccount))
 	mux.HandleFunc("/api/wa/accounts/remove", h.requireAuth(h.handleRemoveAccount))
 	mux.HandleFunc("/api/wa/qr.png", h.requireAuth(h.handleQRPNG))
+	mux.HandleFunc("/api/wa/pair/", h.handlePublicPairAPI)
+	mux.HandleFunc("/api/wa/pairing/tickets", h.requireAuth(h.handlePairingTickets))
+	mux.HandleFunc("/api/wa/pairing/queue", h.requireAuth(h.handlePairingQueue))
+	mux.HandleFunc("/api/wa/pairing/cancel", h.requireAuth(h.handlePairingCancel))
+	mux.HandleFunc("/api/wa/games/score", h.handleGameScore)
 	mux.HandleFunc("/api/wa/events", h.requireAuth(h.handleSSE))
 	mux.HandleFunc("/api/wa/chats", h.requireAuth(h.handleChats))
 	mux.HandleFunc("/api/wa/chats/read", h.requireAuth(h.handleMarkRead))
@@ -569,4 +584,195 @@ func (h *Hub) handleSendMedia(w http.ResponseWriter, r *http.Request) {
 	h.Broadcast("message", stored)
 
 	writeJSON(w, map[string]any{"ok": true, "id": sendResp.ID, "message": stored})
+}
+
+func (h *Hub) handlePairPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(pairHTML)
+}
+
+func (h *Hub) handleGamesPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(gamesHTML)
+}
+
+// handlePublicPairAPI serves buyer-scoped ticket status and QR PNG without
+// exposing admin endpoints or any other buyer's QR code.
+func (h *Hub) handlePublicPairAPI(w http.ResponseWriter, r *http.Request) {
+	q := h.getPairingQueue()
+	if q == nil {
+		http.Error(w, "pairing queue unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	rel := strings.TrimPrefix(r.URL.Path, "/api/wa/pair/")
+	parts := strings.SplitN(rel, "/", 2)
+	if len(parts) != 2 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	token, action := parts[0], parts[1]
+
+	switch action {
+	case "status":
+		t, ok := q.Get(token)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, t)
+
+	case "qr.png":
+		code, ok := q.QRForToken(token)
+		if !ok {
+			http.Error(w, "QR not active for this ticket", http.StatusNotFound)
+			return
+		}
+		encoded, err := qr.Encode(code, qr.L)
+		if err != nil {
+			http.Error(w, "qr encode failed", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(encoded.PNG())
+
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (h *Hub) handlePairingTickets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	q := h.getPairingQueue()
+	if q == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, map[string]string{"error": "pairing queue unavailable"})
+		return
+	}
+	var req struct {
+		Label        string `json:"label"`
+		BuyerJID     string `json:"buyerJid"`
+		DurationDays int    `json:"durationDays"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]string{"error": "invalid json"})
+		return
+	}
+	t, err := q.Enqueue(pairing.EnqueueRequest{
+		Label:        strings.TrimSpace(req.Label),
+		BuyerJID:     utils.NormalizeTarget(req.BuyerJID),
+		DurationDays: req.DurationDays,
+	})
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSON(w, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{
+		"ok":       true,
+		"ticket":   t,
+		"pairPath": "/pair/" + t.Token,
+	})
+}
+
+func (h *Hub) handlePairingQueue(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	q := h.getPairingQueue()
+	var tickets []pairing.Ticket
+	if q != nil {
+		tickets = q.List()
+	}
+	if tickets == nil {
+		tickets = []pairing.Ticket{}
+	}
+	var tenants []db.BotTenant
+	if bs := h.getBotStore(); bs != nil {
+		tenants, _ = bs.ListTenants()
+	}
+	if tenants == nil {
+		tenants = []db.BotTenant{}
+	}
+	writeJSON(w, map[string]any{
+		"tickets": tickets,
+		"tenants": tenants,
+	})
+}
+
+func (h *Hub) handlePairingCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	q := h.getPairingQueue()
+	if q == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, map[string]string{"error": "pairing queue unavailable"})
+		return
+	}
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Token) == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]string{"error": "token required"})
+		return
+	}
+	if err := q.Cancel(strings.TrimSpace(req.Token)); err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		writeJSON(w, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (h *Hub) handleGameScore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	var req struct {
+		UserJID  string `json:"userJid"`
+		GroupJID string `json:"groupJid"`
+		Game     string `json:"game"`
+		Points   int64  `json:"points"`
+		Won      bool   `json:"won"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.UserJID) == "" || strings.TrimSpace(req.Game) == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]string{"error": "userJid and game required"})
+		return
+	}
+	if bs := h.getBotStore(); bs != nil {
+		_ = bs.RecordGameResult(strings.TrimSpace(req.UserJID), strings.TrimSpace(req.GroupJID), strings.ToLower(strings.TrimSpace(req.Game)), req.Won, false, req.Points)
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (h *Hub) getPairingQueue() *pairing.Queue {
+	h.mu.RLock()
+	q := h.pairQueue
+	h.mu.RUnlock()
+	if q != nil {
+		return q
+	}
+	return pairing.DefaultQueue()
+}
+
+func (h *Hub) getBotStore() *db.BotStore {
+	h.mu.RLock()
+	bs := h.botStore
+	h.mu.RUnlock()
+	if bs != nil {
+		return bs
+	}
+	return db.GetBotStore()
 }

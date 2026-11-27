@@ -194,6 +194,7 @@
       <div class="account-row">
         <select class="account-select" id="accountSelect" title="Active WhatsApp account"></select>
         <button class="btn-sm primary" id="pairBtn" title="Pair new Android Companion via QR">+ Pair QR</button>
+        <button class="btn-sm" id="queueBtn" title="Sequential QR Queue for selling bot slots">🎟️ Queue</button>
         <button class="btn-sm" id="newChatBtn" title="Start chat by phone number">+ Chat</button>
         <button class="btn-sm danger" id="unlinkBtn" title="Unlink selected account">Unlink</button>
       </div>
@@ -284,6 +285,27 @@
     <div class="modal-actions">
       <button class="btn-sm" id="newChatCancelBtn">Cancel</button>
       <button class="btn-sm primary" id="newChatGoBtn">Open Chat</button>
+    </div>
+  </div>
+</div>
+
+<!-- Sequential QR Queue (Sell Bot) Modal -->
+<div class="modal-backdrop" id="queueModal">
+  <div class="modal" style="max-width:520px;max-height:86vh;overflow-y:auto;">
+    <h3>🎟️ Sequential QR Pairing Queue (Sell Bot)</h3>
+    <p>Create a buyer pairing link. Buyers pair strictly one-by-one (90s timeout per slot) so QR codes never collide.</p>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <input type="text" id="qLabel" placeholder="Buyer label (e.g. John - 30d)">
+      <input type="text" id="qBuyer" placeholder="Buyer owner phone (e.g. 628123456789, optional)">
+      <input type="number" id="qDays" placeholder="Duration in days (0 = unlimited)" value="30" min="0">
+      <button class="btn-sm primary" id="qCreateBtn">+ Create Buyer Pairing Link</button>
+    </div>
+    <div id="qNewLinkBox" style="display:none;background:var(--bg-input);padding:10px;border-radius:8px;font-size:12px;word-break:break-all;"></div>
+    <div style="font-weight:700;font-size:13px;margin-top:4px;">Live Queue & Recent Tickets</div>
+    <div id="qList" style="display:flex;flex-direction:column;gap:6px;font-size:12.5px;"></div>
+    <div class="modal-actions">
+      <button class="btn-sm" id="qRefreshBtn">Refresh</button>
+      <button class="btn-sm" id="qCloseBtn">Close</button>
     </div>
   </div>
 </div>
@@ -923,6 +945,75 @@
   $('lightboxClose').addEventListener('click', () => $('lightbox').classList.remove('show'));
   $('lightbox').addEventListener('click', (e) => {
     if (e.target === $('lightbox')) $('lightbox').classList.remove('show');
+  });
+
+  async function refreshQueueModal() {
+    try {
+      const data = await apiFetch('/api/wa/pairing/queue');
+      const list = $('qList');
+      const tickets = data.tickets || [];
+      if (tickets.length === 0) {
+        list.innerHTML = '<div style="color:var(--text-secondary);">No tickets in queue yet.</div>';
+        return;
+      }
+      list.innerHTML = tickets.slice(0, 15).map(t => {
+        const link = `${location.origin}/pair/${t.token}`;
+        const pos = t.status === 'queued' ? ` (#${t.position + 1})` : '';
+        const canCancel = t.status === 'queued' || t.status === 'pairing';
+        return `<div style="background:var(--bg-input);padding:8px 10px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <div style="min-width:0;">
+            <div><strong>${escapeHtml(t.label)}</strong> · <span style="color:#25d366">${escapeHtml(t.status)}${pos}</span></div>
+            <div style="font-size:11px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;">${escapeHtml(link)}</div>
+          </div>
+          <div style="display:flex;gap:4px;flex-shrink:0;">
+            <button class="btn-sm" data-copy="${escapeHtml(link)}">Copy</button>
+            ${canCancel ? `<button class="btn-sm danger" data-cancel="${escapeHtml(t.token)}">Cancel</button>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+      list.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => {
+        navigator.clipboard?.writeText(b.dataset.copy).catch(() => {});
+        showToast('Pairing link copied!');
+      }));
+      list.querySelectorAll('[data-cancel]').forEach(b => b.addEventListener('click', async () => {
+        await apiFetch('/api/wa/pairing/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: b.dataset.cancel }),
+        });
+        refreshQueueModal();
+      }));
+    } catch (e) {
+      showToast(e.message);
+    }
+  }
+
+  $('queueBtn').addEventListener('click', () => {
+    $('queueModal').classList.add('show');
+    refreshQueueModal();
+  });
+  $('qCloseBtn').addEventListener('click', () => $('queueModal').classList.remove('show'));
+  $('qRefreshBtn').addEventListener('click', refreshQueueModal);
+  $('qCreateBtn').addEventListener('click', async () => {
+    try {
+      const res = await apiFetch('/api/wa/pairing/tickets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: $('qLabel').value.trim() || 'Buyer Bot',
+          buyerJid: $('qBuyer').value.trim(),
+          durationDays: Number($('qDays').value) || 0,
+        }),
+      });
+      const fullUrl = `${location.origin}${res.pairPath}`;
+      $('qNewLinkBox').style.display = 'block';
+      $('qNewLinkBox').innerHTML = `<strong>Share with buyer:</strong> <a href="${escapeHtml(fullUrl)}" target="_blank" style="color:#53bdeb">${escapeHtml(fullUrl)}</a>`;
+      navigator.clipboard?.writeText(fullUrl).catch(() => {});
+      showToast('Ticket created & link copied!');
+      refreshQueueModal();
+    } catch (e) {
+      showToast(e.message);
+    }
   });
 
   (async () => {

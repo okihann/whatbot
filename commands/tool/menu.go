@@ -195,7 +195,7 @@ func renderMainMenu(botName, prefix, userName string, cats []string) string {
 	for _, c := range cats {
 		allowed[c] = true
 	}
-	for _, cmd := range handlers.Commands {
+	for _, cmd := range handlers.PrimaryCommands {
 		if allowed[cmd.Category] {
 			catCounts[cmd.Category]++
 			totalCmds++
@@ -203,31 +203,28 @@ func renderMainMenu(botName, prefix, userName string, cats []string) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "*%s* 📋\n", botName)
-	fmt.Fprintf(&b, "Hello, %s 👋\n\n", userName)
-	b.WriteString("╭───「 *BOT INFO* 」\n")
-	fmt.Fprintf(&b, "│ ◦ *Prefix:* `%s`\n", prefix)
-	fmt.Fprintf(&b, "│ ◦ *Commands:* %d\n", totalCmds)
-	fmt.Fprintf(&b, "│ ◦ *Platform:* %s\n", runtime.GOOS)
-	fmt.Fprintf(&b, "│ ◦ *Uptime:* %s\n", uptime)
-	fmt.Fprintf(&b, "│ ◦ *Time:* %s\n", now.Format("02/01/2006 15:04 MST"))
-	b.WriteString("╰─────────────\n\n")
+	fmt.Fprintf(&b, "╭─〔 *%s* 〕\n", botName)
+	fmt.Fprintf(&b, "│ User: %s\n", userName)
+	fmt.Fprintf(&b, "│ Runtime: %s\n", uptime)
+	fmt.Fprintf(&b, "│ Prefix: `%s` or `.` / `/`\n", prefix)
+	fmt.Fprintf(&b, "│ Total Cmd: %d\n", totalCmds)
+	fmt.Fprintf(&b, "│ Platform: %s • %s\n", runtime.GOOS, now.Format("02/01 15:04"))
+	b.WriteString("╰──────────\n\n")
 
-	b.WriteString("╭───「 *CATEGORIES* 」\n")
+	b.WriteString("╭─〔 *CATEGORIES* 〕\n")
 	for i, c := range cats {
-		fmt.Fprintf(&b, "│ *%d.* %s %s (%d)\n", i+1, categoryEmoji(c), handlers.Title(c), catCounts[c])
+		fmt.Fprintf(&b, "│ *%d.* %s %s (%d)\n", i+1, categoryEmoji(c), formatCategoryTitle(c), catCounts[c])
 	}
 	b.WriteString("│ *0.* 📜 Show All Commands\n")
-	b.WriteString("╰─────────────\n\n")
-	fmt.Fprintf(&b, "Reply to this message with a number (*1-%d* or *0*),\n", len(cats))
-	fmt.Fprintf(&b, "or run `%shelp <category>`, `%shelp <command>`, or `%shelp all`.", prefix, prefix, prefix)
+	b.WriteString("╰──────────\n\n")
+	fmt.Fprintf(&b, "Reply with *1-%d* or *0*, or run `%smenu <category>`, `%smenu <cmd>`, or `%smenu all`.", len(cats), prefix, prefix, prefix)
 
 	return b.String()
 }
 
 func renderCategoryMenu(prefix, category string) string {
 	var cmds []types.Command
-	for _, c := range handlers.Commands {
+	for _, c := range handlers.PrimaryCommands {
 		if c.Category == category {
 			cmds = append(cmds, c)
 		}
@@ -240,15 +237,15 @@ func renderCategoryMenu(prefix, category string) string {
 	})
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "╭─「 *%s %s Menu* 」\n", categoryEmoji(category), handlers.Title(category))
+	fmt.Fprintf(&b, "╭─〔 *%s %s* 〕\n", categoryEmoji(category), strings.ToUpper(formatCategoryTitle(category)))
 	for _, c := range cmds {
 		if desc := strings.TrimSpace(c.Description); desc != "" {
-			fmt.Fprintf(&b, "│ ◦ `%s%s` — %s\n", prefix, c.Name, desc)
+			fmt.Fprintf(&b, "│ `%s%s` — %s\n", prefix, c.Name, desc)
 		} else {
-			fmt.Fprintf(&b, "│ ◦ `%s%s`\n", prefix, c.Name)
+			fmt.Fprintf(&b, "│ `%s%s`\n", prefix, c.Name)
 		}
 	}
-	b.WriteString("╰─────────────")
+	b.WriteString("╰──────────")
 	return b.String()
 }
 
@@ -259,7 +256,18 @@ func renderAllCommands(prefix string, cats []string) string {
 		if i > 0 {
 			b.WriteString("\n\n")
 		}
-		b.WriteString(renderCategoryMenu(prefix, c))
+		var cmds []types.Command
+		for _, cmd := range handlers.PrimaryCommands {
+			if cmd.Category == c {
+				cmds = append(cmds, cmd)
+			}
+		}
+		sort.Slice(cmds, func(a, j int) bool { return cmds[a].Name < cmds[j].Name })
+		fmt.Fprintf(&b, "╭─〔 *%s %s* 〕\n", categoryEmoji(c), strings.ToUpper(formatCategoryTitle(c)))
+		for _, cmd := range cmds {
+			fmt.Fprintf(&b, "│ `%s%s`\n", prefix, cmd.Name)
+		}
+		b.WriteString("╰──────────")
 	}
 	return b.String()
 }
@@ -269,21 +277,37 @@ func renderCommandDetail(prefix string, cmd types.Command) string {
 	if desc == "" {
 		desc = "No description available."
 	}
+	extra := ""
+	if len(cmd.Aliases) > 0 {
+		extra += fmt.Sprintf("\n• *Aliases:* `%s`", strings.Join(cmd.Aliases, "`, `"))
+	}
+	if cmd.Usage != "" {
+		extra += fmt.Sprintf("\n• *Usage:* `%s`", cmd.Usage)
+	}
 	return fmt.Sprintf(
-		"ℹ️ *Command Info*\n\n• *Command:* `%s%s`\n• *Category:* %s %s\n• *Description:* %s",
-		prefix, cmd.Name, categoryEmoji(cmd.Category), handlers.Title(cmd.Category), desc,
+		"ℹ️ *Command Info*\n\n• *Command:* `%s%s`\n• *Category:* %s %s\n• *Description:* %s%s",
+		prefix, cmd.Name, categoryEmoji(cmd.Category), formatCategoryTitle(cmd.Category), desc, extra,
 	)
+}
+
+func formatCategoryTitle(cat string) string {
+	parts := strings.Split(strings.ReplaceAll(cat, "_", " "), " ")
+	for i, p := range parts {
+		parts[i] = handlers.Title(p)
+	}
+	return strings.Join(parts, " ")
 }
 
 func matchCategory(cats []string, query string) (string, bool) {
 	q := strings.ToLower(strings.TrimSpace(query))
+	qNorm := strings.ReplaceAll(q, " ", "_")
 	for _, c := range cats {
-		if strings.ToLower(c) == q {
+		if strings.ToLower(c) == q || strings.ToLower(c) == qNorm {
 			return c, true
 		}
 	}
 	for _, c := range cats {
-		if strings.HasPrefix(strings.ToLower(c), q) && len(q) >= 3 {
+		if (strings.HasPrefix(strings.ToLower(c), q) || strings.HasPrefix(strings.ToLower(c), qNorm)) && len(q) >= 3 {
 			return c, true
 		}
 	}
@@ -293,13 +317,21 @@ func matchCategory(cats []string, query string) (string, bool) {
 // menuCategories lists categories in a stable, friendly order, including
 // "owner" only when includeOwner is true.
 func menuCategories(includeOwner bool) []string {
-	preferred := []string{"downloader", "search", "media", "tools", "anime", "main"}
+	preferred := []string{
+		"general", "main", "profile", "bot",
+		"group_admin", "group_security",
+		"downloader", "youtube", "music",
+		"sticker", "media", "audiofx",
+		"tools", "search",
+		"animanga", "anime", "waifu",
+		"fun", "game", "minigame",
+	}
 	if includeOwner {
 		preferred = append(preferred, "owner")
 	}
 
 	seen := map[string]bool{}
-	for _, c := range handlers.Commands {
+	for _, c := range handlers.PrimaryCommands {
 		if c.Category == "" {
 			continue
 		}
@@ -345,18 +377,40 @@ func formatMenuUptime(d time.Duration) string {
 
 func categoryEmoji(category string) string {
 	switch strings.ToLower(category) {
+	case "bot":
+		return "🤖"
+	case "general", "main":
+		return "📋"
+	case "profile":
+		return "👤"
+	case "group_admin":
+		return "🛡️"
+	case "group_security":
+		return "🔒"
 	case "downloader":
 		return "📥"
-	case "search":
-		return "🔎"
+	case "youtube":
+		return "▶️"
+	case "music":
+		return "🎧"
+	case "sticker", "media":
+		return "🖼️"
+	case "audiofx":
+		return "🎛️"
 	case "tools":
 		return "🛠️"
-	case "anime":
+	case "search":
+		return "🔎"
+	case "animanga", "anime":
 		return "🌸"
-	case "media":
-		return "🖼️"
-	case "main":
-		return "📋"
+	case "waifu":
+		return "💐"
+	case "fun":
+		return "😂"
+	case "game":
+		return "🎮"
+	case "minigame":
+		return "🕹️"
 	case "owner":
 		return "👑"
 	default:

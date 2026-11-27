@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,8 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	db "bot/databases"
+	"bot/pairing"
 
 	"go.mau.fi/whatsmeow"
 )
@@ -166,5 +169,123 @@ func TestWebServerEndpointsAndAuth(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 with valid password, got %d", resp.StatusCode)
+	}
+}
+
+func TestSequentialPairingAndGamesWebRoutes(t *testing.T) {
+	dir := t.TempDir()
+	sessionDB, err := db.OpenSequentialSQLite(filepath.Join(dir, "session.db"))
+	if err != nil {
+		t.Fatalf("OpenSequentialSQLite: %v", err)
+	}
+	defer db.CheckpointAndClose(sessionDB)
+
+	chatStore, err := db.OpenChatStore(filepath.Join(dir, "webchat.db"), filepath.Join(dir, "webmedia"))
+	if err != nil {
+		t.Fatalf("OpenChatStore: %v", err)
+	}
+	defer chatStore.Close()
+
+	botStore, err := db.OpenBotStore(filepath.Join(dir, "botdata.db"))
+	if err != nil {
+		t.Fatalf("OpenBotStore: %v", err)
+	}
+	defer botStore.Close()
+
+	qrReady := make(chan struct{}, 1)
+	release := make(chan struct{})
+	q := pairing.NewQueue(botStore, func(ctx context.Context, emitQR func(code string)) (string, error) {
+		emitQR("2@buyer-sequential-qr")
+		select {
+		case qrReady <- struct{}{}:
+		default:
+		}
+		select {
+		case <-release:
+			return "628777001", nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}, 5*time.Second, nil)
+	defer func() {
+		close(release)
+		q.Close()
+	}()
+
+	hub := NewHub(chatStore, sessionDB, &mockAccountManager{})
+	hub.SetBotStore(botStore)
+	hub.SetPairingQueue(q)
+
+	mux := http.NewServeMux()
+	hub.Mount(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Create ticket via admin API
+	resp, err := http.Post(srv.URL+"/api/wa/pairing/tickets", "application/json", strings.NewReader(`{"label":"Buyer A","buyerJid":"628555","durationDays":30}`))
+	if err != nil {
+		t.Fatalf("POST /api/wa/pairing/tickets: %v", err)
+	}
+	var createRes struct {
+		OK       bool           `json:"ok"`
+		PairPath string         `json:"pairPath"`
+		Ticket   pairing.Ticket `json:"ticket"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&createRes)
+	resp.Body.Close()
+	if !createRes.OK || createRes.Ticket.Token == "" {
+		t.Fatalf("unexpected ticket create response: %+v", createRes)
+	}
+
+	select {
+	case <-qrReady:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for ticket QR")
+	}
+
+	// Buyer pairing page HTML
+	resp, err = http.Get(srv.URL + createRes.PairPath)
+	if err != nil {
+		t.Fatalf("GET pair page: %v", err)
+	}
+	pairBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(pairBody), "Sequential QR") {
+		t.Fatalf("unexpected pair page: status=%d", resp.StatusCode)
+	}
+
+	// Buyer-scoped QR PNG
+	resp, err = http.Get(srv.URL + "/api/wa/pair/" + createRes.Ticket.Token + "/qr.png")
+	if err != nil {
+		t.Fatalf("GET buyer qr.png: %v", err)
+	}
+	pngBytes, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !bytes.HasPrefix(pngBytes, []byte{0x89, 'P', 'N', 'G'}) {
+		t.Fatalf("expected valid PNG for buyer token, status=%d", resp.StatusCode)
+	}
+
+	// Arcade games page + score submission
+	resp, err = http.Get(srv.URL + "/games/snake")
+	if err != nil {
+		t.Fatalf("GET /games/snake: %v", err)
+	}
+	gameBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(gameBody), "Whatbot Arcade") {
+		t.Fatalf("unexpected games page: status=%d", resp.StatusCode)
+	}
+
+	resp, err = http.Post(srv.URL+"/api/wa/games/score", "application/json", strings.NewReader(`{"userJid":"628555","groupJid":"1203@g.us","game":"snake","points":120,"won":true}`))
+	if err != nil {
+		t.Fatalf("POST /api/wa/games/score: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on score post, got %d", resp.StatusCode)
+	}
+	lb, _ := botStore.GameLeaderboard("1203@g.us", 5)
+	if len(lb) != 1 || lb[0].Points != 120 {
+		t.Fatalf("expected recorded arcade score 120, got %+v", lb)
 	}
 }

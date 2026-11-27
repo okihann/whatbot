@@ -11,6 +11,7 @@ import (
 	"time"
 
 	db "bot/databases"
+	"bot/pairing"
 	"bot/utils"
 
 	"go.mau.fi/whatsmeow"
@@ -48,6 +49,8 @@ type SSEEvent struct {
 type Hub struct {
 	store     *db.ChatStore
 	sessionDB *sql.DB
+	botStore  *db.BotStore
+	pairQueue *pairing.Queue
 	accounts  AccountManager
 	startedAt time.Time
 
@@ -67,6 +70,24 @@ func NewHub(chatStore *db.ChatStore, sessionDB *sql.DB, accounts AccountManager)
 		subscribers: make(map[chan SSEEvent]struct{}),
 		qrStatus:    "idle",
 	}
+}
+
+func (h *Hub) SetBotStore(bs *db.BotStore) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.botStore = bs
+	h.mu.Unlock()
+}
+
+func (h *Hub) SetPairingQueue(q *pairing.Queue) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.pairQueue = q
+	h.mu.Unlock()
 }
 
 func (h *Hub) Subscribe() (chan SSEEvent, func()) {
