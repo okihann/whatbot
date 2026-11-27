@@ -142,6 +142,12 @@ func ensurePlayerDefaults(p *Player) {
 	if len(p.Character.Skills) == 0 {
 		p.Character.Skills = DefaultHeroSkills
 	}
+	if p.Location == "" {
+		p.Location = "emerald_plains"
+	}
+	if p.VisitedZones == nil {
+		p.VisitedZones = map[string]bool{"emerald_plains": true}
+	}
 	today := time.Now().Format("2006-01-02")
 	if p.Quest.DateKey != today {
 		p.Quest = DailyQuestState{DateKey: today}
@@ -218,8 +224,11 @@ func CollectAllIncome(p *Player) map[Resource]int64 {
 	return collected
 }
 
-// AddRPGXP awards XP and levels up ruler & hero stats cleanly.
+// AddRPGXP awards XP and levels up ruler & hero stats cleanly (granting +3 StatPoints per level).
 func AddRPGXP(p *Player, xp int64) bool {
+	if pet := GetEquippedPet(p); pet != nil && pet.BonusXPPct > 0 {
+		xp += (xp * int64(pet.BonusXPPct)) / 100
+	}
 	p.XP += xp
 	leveled := false
 	for {
@@ -230,6 +239,7 @@ func AddRPGXP(p *Player, xp int64) bool {
 		p.XP -= need
 		p.Level++
 		p.Character.Level = p.Level
+		p.StatPoints += 3
 		p.Energy.Max += 5
 		p.Energy.Current = p.Energy.Max
 		p.Character.Stats.MaxHealth += 15
@@ -242,6 +252,19 @@ func AddRPGXP(p *Player, xp int64) bool {
 		leveled = true
 	}
 	return leveled
+}
+
+// GetEquippedPet returns the player's currently active companion pet, if any.
+func GetEquippedPet(p *Player) *Pet {
+	if p == nil || p.EquippedPet == "" {
+		return nil
+	}
+	for i := range p.Pets {
+		if p.Pets[i].ID == p.EquippedPet {
+			return &p.Pets[i]
+		}
+	}
+	return nil
 }
 
 // CalculateNetWorth computes total empire net worth across Yen, Bank, Resources, Buildings, and Army.
@@ -258,6 +281,7 @@ func CalculateNetWorth(p *Player) int64 {
 			total += int64(u.Quantity) * bp.CostYen
 		}
 	}
+	total += int64(len(p.Pets)) * 1200
 	return total
 }
 
@@ -285,18 +309,11 @@ func ArmyAttackDefense(p *Player) (int, int) {
 
 // HeroCombatPower computes the hero's effective duel/hunt attack & defense score.
 func HeroCombatPower(p *Player) int {
-	atk := p.Character.Stats.Strength + p.Character.Stats.Dexterity/2
-	def := p.Character.Stats.MaxHealth / 10
-	if w, ok := GearBlueprints[p.EquippedWeapon]; ok {
-		atk += w.Bonus
-	}
-	if a, ok := GearBlueprints[p.EquippedArmor]; ok {
-		def += a.Bonus
-	}
-	return atk + def
+	atk, def := HeroAttackDefense(p)
+	return atk + def + p.Character.Stats.MaxHealth/10
 }
 
-// HeroAttackDefense returns (attack, defense) for PvE hunting & PvP duels.
+// HeroAttackDefense returns (attack, defense) for PvE hunting, World Boss, & PvP duels.
 func HeroAttackDefense(p *Player) (int, int) {
 	atk := p.Character.Stats.Strength + p.Character.Stats.Dexterity/2
 	def := p.Character.Stats.Dexterity / 2
@@ -305,6 +322,10 @@ func HeroAttackDefense(p *Player) (int, int) {
 	}
 	if a, ok := GearBlueprints[p.EquippedArmor]; ok {
 		def += a.Bonus
+	}
+	if pet := GetEquippedPet(p); pet != nil {
+		atk += pet.BonusATK + pet.Level*2
+		def += pet.BonusDEF + pet.Level
 	}
 	return atk, def
 }

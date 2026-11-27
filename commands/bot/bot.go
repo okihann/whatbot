@@ -241,7 +241,7 @@ func cmdTrackBot(client *whatsmeow.Client, msg *events.Message, args []string) {
 
 func cmdBotInfo(client *whatsmeow.Client, msg *events.Message, args []string) {
 	conf, _ := config.LoadConfig()
-	botName := "Whatbot"
+	botName := "NopeBot"
 	if conf != nil && conf.Settings.BotName != "" {
 		botName = conf.Settings.BotName
 	}

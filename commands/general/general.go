@@ -26,7 +26,7 @@ func init() {
 
 	cmds := []types.Command{
 		// GENERAL
-		{Name: "about", Category: "general", Description: "About Whatbot.", Execute: cmdAbout},
+		{Name: "about", Category: "general", Description: "About NopeBot.", Execute: cmdAbout},
 		{Name: "ping", Category: "general", Description: "Check bot response latency.", Execute: cmdPing},
 		{Name: "owner", Category: "general", Description: "Show bot owner contact.", Execute: cmdOwner},
 		{Name: "sc", Category: "general", Description: "Show repository/source info.", Execute: cmdSC},
@@ -138,7 +138,7 @@ func userActivityAndAFKMiddleware(client *whatsmeow.Client, msg *events.Message)
 
 func cmdAbout(client *whatsmeow.Client, msg *events.Message, args []string) {
 	utils.SendReply(client, msg.Info.Chat, fmt.Sprintf(
-		"🤖 *Whatbot — Android Companion Edition*\nFast Go + whatsmeow multi-device bot with sequential WAL SQLite, View-Once capture, Anti-Delete, Sound Stickers, Sequential QR Queue, and %d commands.\nUse `.menu` or `/help` to explore!",
+		"🤖 *NopeBot — Android Companion Edition*\nFast Go + whatsmeow multi-device bot with sequential WAL SQLite, View-Once capture, Anti-Delete, Sound Stickers, Sequential QR Queue, and %d commands.\nUse `.menu` or `/help` to explore!",
 		len(handlers.PrimaryCommands),
 	))
 }
@@ -171,7 +171,7 @@ func cmdOwner(client *whatsmeow.Client, msg *events.Message, args []string) {
 }
 
 func cmdSC(client *whatsmeow.Client, msg *events.Message, args []string) {
-	utils.SendReply(client, msg.Info.Chat, "📦 *Whatbot (Go / whatsmeow)*\nBuilt with sequential WAL SQLite, Android Companion View-Once support, and embedded WhatsApp Web UI.")
+	utils.SendReply(client, msg.Info.Chat, "📦 *NopeBot (Go / whatsmeow)*\nBuilt with sequential WAL SQLite, Android Companion View-Once support, and embedded WhatsApp Web UI.")
 }
 
 func cmdJoin(client *whatsmeow.Client, msg *events.Message, args []string) {
@@ -206,7 +206,7 @@ func cmdLimit(client *whatsmeow.Client, msg *events.Message, args []string) {
 }
 
 func cmdBenefit(client *whatsmeow.Client, msg *events.Message, args []string) {
-	utils.SendReply(client, msg.Info.Chat, "🌟 *Whatbot Benefits*\n• Unlimited downloaders, stickers, audio FX & tools\n• Android Companion View-Once recovery & Anti-Delete\n• Full Group Admin & Security suite\n• Interactive chat games & Web Arcade leaderboards")
+	utils.SendReply(client, msg.Info.Chat, "🌟 *NopeBot Benefits*\n• Unlimited downloaders, stickers, audio FX & tools\n• Android Companion View-Once recovery & Anti-Delete\n• Full Group Admin & Security suite\n• Interactive chat games & Web Arcade leaderboards")
 }
 
 func cmdGrantPremium(client *whatsmeow.Client, msg *events.Message, args []string) {
@@ -539,7 +539,7 @@ func cmdWebLogin(client *whatsmeow.Client, msg *events.Message, args []string) {
 	}
 	uid := userKey(client, msg)
 	utils.SendReply(client, msg.Info.Chat, fmt.Sprintf(
-		"🌐 *Whatbot Web Links*\n• WhatsApp Web UI: %s\n• Arcade MiniGames: %s/games?user=%s",
+		"🌐 *NopeBot Web Links*\n• WhatsApp Web UI: %s\n• Arcade MiniGames: %s/games?user=%s",
 		base, base, uid,
 	))
 }

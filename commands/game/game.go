@@ -143,7 +143,7 @@ func init() {
 		{Name: "badges", Aliases: []string{"groupachievements"}, Category: "game", Description: "View unlocked game badges and achievements.", Execute: cmdBadges},
 		{Name: "groupstats", Aliases: []string{"groupmvp", "groupcarry", "groupcontrib", "groupcompare"}, Category: "game", Description: "View group MVP, top contributor, and group game comparison.", Execute: cmdGroupGameStats},
 		{Name: "rival", Category: "game", Description: "Compare your game score against a mentioned rival.", Execute: cmdRival},
-		{Name: "gamelimit", Category: "game", Description: "Show game session limits (unlimited on self-hosted Whatbot).", Execute: cmdGameLimit},
+		{Name: "gamelimit", Category: "game", Description: "Show game session limits (unlimited on self-hosted NopeBot).", Execute: cmdGameLimit},
 	}
 	for _, c := range cmds {
 		handlers.RegisterCommand(c)
@@ -798,5 +798,5 @@ func cmdRival(client *whatsmeow.Client, msg *events.Message, args []string) {
 }
 
 func cmdGameLimit(client *whatsmeow.Client, msg *events.Message, args []string) {
-	utils.SendReply(client, msg.Info.Chat, "🎮 Game Limit: *Unlimited* on self-hosted Whatbot!")
+	utils.SendReply(client, msg.Info.Chat, "🎮 Game Limit: *Unlimited* on self-hosted NopeBot!")
 }

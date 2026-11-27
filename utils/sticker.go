@@ -23,8 +23,8 @@ import (
 const (
 	MaxStaticStickerBytes   = 100 * 1024 // WhatsApp static WebP sticker limit
 	MaxAnimatedStickerBytes = 900 * 1024 // WhatsApp animated/sound sticker limit
-	DefaultStickerPackName  = "Whatbot"
-	DefaultStickerAuthor    = "whatbot"
+	DefaultStickerPackName  = "NopeBot"
+	DefaultStickerAuthor    = "nopebot"
 )
 
 // BuildStickerEXIF creates a WhatsApp-compliant TIFF/EXIF payload carrying
@@ -41,7 +41,7 @@ func BuildStickerEXIF(packName, author string, emojis []string) []byte {
 	}
 
 	payload, _ := json.Marshal(map[string]any{
-		"sticker-pack-id":        "com.whatbot.stickers",
+		"sticker-pack-id":        "com.nopebot.stickers",
 		"sticker-pack-name":      packName,
 		"sticker-pack-publisher": author,
 		"emojis":                 emojis,
@@ -176,7 +176,7 @@ func ConvertImageToWebP(srcData []byte, crop bool, packName, author string) ([]b
 	}
 	defer cleanup()
 
-	workDir, err := os.MkdirTemp("", "whatbot-stk-*")
+	workDir, err := os.MkdirTemp("", "nopebot-stk-*")
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +247,7 @@ func ConvertVideoToAnimatedWebP(srcData []byte, maxSeconds int, crop bool, packN
 	}
 	defer cleanup()
 
-	workDir, err := os.MkdirTemp("", "whatbot-astk-*")
+	workDir, err := os.MkdirTemp("", "nopebot-astk-*")
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +317,7 @@ func ProbeMediaStreams(mediaBytes []byte) (hasAudio bool, duration float64) {
 	}
 	defer cleanup()
 
-	workDir, err := os.MkdirTemp("", "whatbot-probe-*")
+	workDir, err := os.MkdirTemp("", "nopebot-probe-*")
 	if err != nil {
 		return false, 0
 	}
@@ -374,7 +374,7 @@ func ConvertToStickerOpus(srcData []byte, maxSeconds int) ([]byte, uint32, error
 	}
 	defer cleanup()
 
-	workDir, err := os.MkdirTemp("", "whatbot-sopus-*")
+	workDir, err := os.MkdirTemp("", "nopebot-sopus-*")
 	if err != nil {
 		return nil, 0, err
 	}

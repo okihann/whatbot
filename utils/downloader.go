@@ -266,7 +266,7 @@ func DownloadVideo(videoURL, outputFile, quality string) error {
 	}
 	defer ffmpegCleanup()
 
-	workDir, err := os.MkdirTemp("", "whatbot-dl-*")
+	workDir, err := os.MkdirTemp("", "nopebot-dl-*")
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
 	}
@@ -332,7 +332,7 @@ func DownloadAudioMP3(videoURL, outputFile string) error {
 	}
 	defer ffmpegCleanup()
 
-	workDir, err := os.MkdirTemp("", "whatbot-audio-*")
+	workDir, err := os.MkdirTemp("", "nopebot-audio-*")
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
 	}

@@ -72,7 +72,7 @@ func (t *Tunnel) Start(cfg Config) error {
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 	agent, err := ngrokgo.NewAgent(
 		ngrokgo.WithAuthtoken(cfg.AuthToken),
-		ngrokgo.WithAgentDescription("whatbot explicit ngrok tunnel"),
+		ngrokgo.WithAgentDescription("nopebot explicit ngrok tunnel"),
 	)
 	if err != nil {
 		t.cancel()
@@ -85,8 +85,8 @@ func (t *Tunnel) Start(cfg Config) error {
 		t.ctx,
 		ngrokgo.WithUpstream("http://127.0.0.1:"+cfg.Port),
 		ngrokgo.WithURL(cfg.Domain),
-		ngrokgo.WithDescription("whatbot HTTP API tunnel"),
-		ngrokgo.WithName("whatbot"),
+		ngrokgo.WithDescription("nopebot HTTP API tunnel"),
+		ngrokgo.WithName("nopebot"),
 	)
 	if err != nil {
 		t.cancel()

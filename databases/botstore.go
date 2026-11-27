@@ -198,7 +198,7 @@ func OpenBotStore(dbPath string) (*BotStore, error) {
 	CREATE TABLE IF NOT EXISTS bot_tenants (
 		account_id   TEXT PRIMARY KEY,
 		owner_jid    TEXT NOT NULL DEFAULT '',
-		bot_name     TEXT NOT NULL DEFAULT 'Whatbot',
+		bot_name     TEXT NOT NULL DEFAULT 'NopeBot',
 		prefix       TEXT NOT NULL DEFAULT '',
 		self_mode    INTEGER NOT NULL DEFAULT 0,
 		group_mode   INTEGER NOT NULL DEFAULT 0,
@@ -310,6 +310,10 @@ func OpenBotStore(dbPath string) (*BotStore, error) {
 		conn.Close()
 		return nil, fmt.Errorf("init botstore extra schema: %w", err)
 	}
+	if err := initMarketAndWorldSchema(conn); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("init botstore market schema: %w", err)
+	}
 
 	return &BotStore{db: conn}, nil
 }
@@ -345,7 +349,7 @@ func (s *BotStore) GetTenant(accountID string) (*BotTenant, error) {
 	var sm, gm, ar, rc, nsfw, jbLock int
 	err := row.Scan(&t.AccountID, &t.OwnerJID, &t.BotName, &t.Prefix, &sm, &gm, &ar, &rc, &t.AnswerCall, &nsfw, &jbLock, &t.PacingMS, &t.ExpiresAt, &t.CreatedAt, &t.Notes)
 	if err == sql.ErrNoRows {
-		return &BotTenant{AccountID: accountID, BotName: "Whatbot", JadiBotLocked: true, CreatedAt: time.Now().Unix()}, nil
+		return &BotTenant{AccountID: accountID, BotName: "NopeBot", JadiBotLocked: true, CreatedAt: time.Now().Unix()}, nil
 	}
 	if err != nil {
 		return nil, err

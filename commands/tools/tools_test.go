@@ -7,7 +7,7 @@ import (
 
 func TestEncodersAndDecodersRoundTrip(t *testing.T) {
 	codecs := []string{"b64", "b32", "b85", "hex", "bin", "oct", "rot13", "atbash", "url", "html"}
-	input := "Hello Whatbot 123!"
+	input := "Hello NopeBot 123!"
 	for _, c := range codecs {
 		enc, err := EncodeString(c, input)
 		if err != nil {
@@ -41,7 +41,7 @@ func TestCalculatorBarcodeAndPDF(t *testing.T) {
 		t.Fatalf("expected error on division by zero")
 	}
 
-	pngBytes := RenderBarcodePNG("WHATBOT-2026")
+	pngBytes := RenderBarcodePNG("NOPEBOT-2026")
 	if !bytes.HasPrefix(pngBytes, []byte{0x89, 'P', 'N', 'G'}) {
 		t.Fatalf("expected PNG header from RenderBarcodePNG")
 	}

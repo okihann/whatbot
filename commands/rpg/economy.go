@@ -21,7 +21,7 @@ import (
 func init() {
 	cmds := []types.Command{
 		{Name: "bank", Category: "rpg", Description: "Manage RPG bank. Usage: .bank [deposit|withdraw|upgrade|transfer] [amount|all]", Execute: cmdBank},
-		{Name: "shop", Aliases: []string{"toko", "market"}, Category: "rpg", Description: "View Coinsteel Shop items & live hourly resource market prices.", Execute: cmdShop},
+		{Name: "shop", Aliases: []string{"toko", "rpgmarket"}, Category: "rpg", Description: "View Coinsteel Shop items & live hourly resource market prices.", Execute: cmdShop},
 		{Name: "buy", Aliases: []string{"beli"}, Category: "rpg", Description: "Buy an item from the RPG shop. Usage: .buy <item_id> [qty]", Execute: cmdBuy},
 		{Name: "sell", Aliases: []string{"jual"}, Category: "rpg", Description: "Sell empire resources at live hourly market prices. Usage: .sell <resource> <qty|all>", Execute: cmdSell},
 		{Name: "eat", Aliases: []string{"makan", "rest"}, Category: "rpg", Description: "Eat food or use potions to restore Energy & HP. Usage: .eat [vegetables|fruit|meat|energy_potion|hp_potion]", Execute: cmdEat},

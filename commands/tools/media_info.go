@@ -349,7 +349,7 @@ func cmdToMP3(client *whatsmeow.Client, msg *events.Message, args []string) {
 		return
 	}
 	defer cleanup()
-	tmpDir, _ := os.MkdirTemp("", "whatbot-tomp3-*")
+	tmpDir, _ := os.MkdirTemp("", "nopebot-tomp3-*")
 	defer os.RemoveAll(tmpDir)
 	inPath := filepath.Join(tmpDir, "in.media")
 	outPath := filepath.Join(tmpDir, "out.mp3")
@@ -386,7 +386,7 @@ func cmdTrim(client *whatsmeow.Client, msg *events.Message, args []string) {
 		return
 	}
 	defer cleanup()
-	tmpDir, _ := os.MkdirTemp("", "whatbot-trim-*")
+	tmpDir, _ := os.MkdirTemp("", "nopebot-trim-*")
 	defer os.RemoveAll(tmpDir)
 	inPath := filepath.Join(tmpDir, "in.media")
 	_ = os.WriteFile(inPath, data, 0600)
@@ -441,7 +441,7 @@ func cmdCompress(client *whatsmeow.Client, msg *events.Message, args []string) {
 		return
 	}
 	defer cleanup()
-	tmpDir, _ := os.MkdirTemp("", "whatbot-comp-*")
+	tmpDir, _ := os.MkdirTemp("", "nopebot-comp-*")
 	defer os.RemoveAll(tmpDir)
 	inPath := filepath.Join(tmpDir, "in.mp4")
 	outPath := filepath.Join(tmpDir, "out.mp4")
@@ -680,7 +680,7 @@ func cmdUpload(client *whatsmeow.Client, msg *events.Message, args []string) {
 	} else if strings.HasPrefix(mimeType, "audio/") {
 		ext = ".mp3"
 	}
-	link, err := utils.UploadToLitterbox(data, "whatbot"+ext)
+	link, err := utils.UploadToLitterbox(data, "nopebot"+ext)
 	if err != nil {
 		utils.SendReply(client, msg.Info.Chat, "❌ Upload failed: "+err.Error())
 		return

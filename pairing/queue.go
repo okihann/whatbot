@@ -448,7 +448,7 @@ func (q *Queue) runTicket(token string) {
 	if snap.Status == StatusConnected && snap.AccountID != "" && q.store != nil {
 		tenant, _ := q.store.GetTenant(snap.AccountID)
 		if tenant == nil {
-			tenant = &db.BotTenant{AccountID: snap.AccountID, BotName: "Whatbot"}
+			tenant = &db.BotTenant{AccountID: snap.AccountID, BotName: "NopeBot"}
 		}
 		if snap.BuyerJID != "" {
 			tenant.OwnerJID = snap.BuyerJID

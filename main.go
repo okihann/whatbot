@@ -24,6 +24,7 @@ import (
 	_ "bot/commands/general"
 	"bot/commands/groupadmin"
 	_ "bot/commands/groupsec"
+	"bot/commands/market"
 	_ "bot/commands/minigame"
 	"bot/commands/owner"
 	_ "bot/commands/rpg"
@@ -412,6 +413,7 @@ func main() {
 
 	stopBg := make(chan struct{})
 	groupadmin.StartGroupScheduler(stopBg, snapshotClients)
+	market.StartMarketMonitor(stopBg, snapshotClients)
 	startTenantExpiryReaper(stopBg, accountMgr)
 
 	devices, err := dbContainer.GetAllDevices(context.Background())

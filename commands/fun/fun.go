@@ -222,7 +222,7 @@ func cmdTruthOrDare(client *whatsmeow.Client, msg *events.Message, args []string
 	}
 	dares := []string{
 		"Send a voice note singing the chorus of your favorite song!",
-		"Change your bio to 'Powered by Whatbot' for 1 hour.",
+		"Change your bio to 'Powered by NopeBot' for 1 hour.",
 		"Type your next 3 messages using only emojis.",
 		"Send the 5th photo in your gallery (SFW only!).",
 		"Compliment the person who texted right before you.",

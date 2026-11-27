@@ -143,7 +143,7 @@ func downloadDirectYTVideo(client *whatsmeow.Client, chatJID waTypes.JID, videoU
 
 	utils.SendReply(client, chatJID, fmt.Sprintf("🎬 *[ YOUTUBE VIDEO ]*\n\n*Title:* %s\n\n⏳ Downloading and preparing video...", title))
 
-	workDir, err := os.MkdirTemp("", "whatbot-yt-*")
+	workDir, err := os.MkdirTemp("", "nopebot-yt-*")
 	if err != nil {
 		utils.SendReply(client, chatJID, "❌ Could not create temporary workspace.")
 		return
@@ -203,7 +203,7 @@ func downloadDirectYTAudio(client *whatsmeow.Client, chatJID waTypes.JID, videoU
 
 	utils.SendReply(client, chatJID, fmt.Sprintf("🎧 *[ YOUTUBE AUDIO ]*\n\n*Title:* %s\n\n⏳ Downloading and converting to MP3...", title))
 
-	workDir, err := os.MkdirTemp("", "whatbot-yta-*")
+	workDir, err := os.MkdirTemp("", "nopebot-yta-*")
 	if err != nil {
 		utils.SendReply(client, chatJID, "❌ Could not create temporary workspace.")
 		return

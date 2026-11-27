@@ -71,7 +71,7 @@ func cmdGenericYtDlp(label string) func(*whatsmeow.Client, *events.Message, []st
 		}
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("⏳ Downloading %s media...", label))
 
-		tmpDir, err := os.MkdirTemp("", "whatbot-dl-*")
+		tmpDir, err := os.MkdirTemp("", "nopebot-dl-*")
 		if err != nil {
 			utils.SendReply(client, msg.Info.Chat, "❌ Temp dir error: "+err.Error())
 			return
@@ -392,7 +392,7 @@ func cmdYtClip(client *whatsmeow.Client, msg *events.Message, args []string) {
 	}
 	rawURL, startSec, endSec := fields[0], fields[1], fields[2]
 	utils.SendReply(client, msg.Info.Chat, "✂️ Clipping YouTube segment...")
-	tmpDir, err := os.MkdirTemp("", "whatbot-ytclip-*")
+	tmpDir, err := os.MkdirTemp("", "nopebot-ytclip-*")
 	if err != nil {
 		return
 	}
@@ -433,7 +433,7 @@ func cmdYtSub(client *whatsmeow.Client, msg *events.Message, args []string) {
 		return
 	}
 	defer cleanup()
-	tmpDir, err := os.MkdirTemp("", "whatbot-ytsub-*")
+	tmpDir, err := os.MkdirTemp("", "nopebot-ytsub-*")
 	if err != nil {
 		return
 	}
@@ -474,7 +474,7 @@ func cmdMusicPlay(client *whatsmeow.Client, msg *events.Message, args []string) 
 	}
 	utils.SendReply(client, msg.Info.Chat, "🎧 Downloading audio: *"+title+"*...")
 
-	tmpDir, err := os.MkdirTemp("", "whatbot-music-*")
+	tmpDir, err := os.MkdirTemp("", "nopebot-music-*")
 	if err != nil {
 		return
 	}

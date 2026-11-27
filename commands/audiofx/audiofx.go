@@ -81,7 +81,7 @@ func cmdAudioEffect(client *whatsmeow.Client, msg *events.Message, args []string
 	}
 	defer cleanup()
 
-	tmpDir, err := os.MkdirTemp("", "whatbot-afx-*")
+	tmpDir, err := os.MkdirTemp("", "nopebot-afx-*")
 	if err != nil {
 		return
 	}

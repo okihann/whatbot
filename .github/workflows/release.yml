@@ -164,7 +164,7 @@ jobs:
         if: env.OBFUSCATE == 'true'
         run: go install mvdan.cc/garble@latest
 
-      - name: Build Whatbot
+      - name: Build NopeBot
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -175,7 +175,7 @@ jobs:
           mkdir -p dist
           suffix=''
           if [ "${GOOS}" = "windows" ]; then suffix='.exe'; fi
-          output="dist/whatbot-${{ matrix.name }}${suffix}"
+          output="dist/nopebot-${{ matrix.name }}${suffix}"
           if [ "${OBFUSCATE}" = "true" ]; then
             garble -tiny -literals -seed=random build -trimpath -buildvcs=false -ldflags='-s -w' -o "$output" .
           else
@@ -198,23 +198,23 @@ jobs:
             *) echo 'Cross-architecture build: embedded files verified; native execution requires the matching target runner.' ;;
           esac
 
-      - name: Smoke test Whatbot binary
+      - name: Smoke test NopeBot binary
         shell: bash
         run: |
           set -euo pipefail
-          test -s "dist/whatbot-${{ matrix.name }}${{ matrix.ext }}"
-          file "dist/whatbot-${{ matrix.name }}${{ matrix.ext }}"
+          test -s "dist/nopebot-${{ matrix.name }}${{ matrix.ext }}"
+          file "dist/nopebot-${{ matrix.name }}${{ matrix.ext }}"
 
       - name: Package
         shell: bash
         run: |
           set -euo pipefail
-          tar -czf "whatbot-${{ matrix.name }}.tar.gz" -C dist "$(basename dist/whatbot-${{ matrix.name }}${{ matrix.ext }})"
+          tar -czf "nopebot-${{ matrix.name }}.tar.gz" -C dist "$(basename dist/nopebot-${{ matrix.name }}${{ matrix.ext }})"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: whatbot-${{ matrix.name }}
-          path: whatbot-${{ matrix.name }}.tar.gz
+          name: nopebot-${{ matrix.name }}
+          path: nopebot-${{ matrix.name }}.tar.gz
           if-no-files-found: error
 
   release:
@@ -227,7 +227,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: whatbot-*
+          pattern: nopebot-*
           merge-multiple: true
 
       - name: Generate checksums

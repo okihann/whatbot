@@ -45,7 +45,7 @@ func init() {
 func executeMenu(client *whatsmeow.Client, msg *events.Message, args []string) {
 	conf, _ := config.LoadConfig()
 	prefix := "."
-	botName := "Whatbot"
+	botName := "NopeBot"
 	if conf != nil {
 		if conf.Settings.Prefix != "" {
 			prefix = conf.Settings.Prefix
@@ -326,7 +326,7 @@ func matchCategory(cats []string, query string) (string, bool) {
 func menuCategories(includeOwner bool) []string {
 	preferred := []string{
 		"general", "main", "profile", "bot",
-		"rpg", "confess",
+		"market", "rpg", "confess",
 		"group_admin", "group_security",
 		"downloader", "youtube", "music",
 		"sticker", "media", "audiofx",
@@ -391,6 +391,8 @@ func categoryEmoji(category string) string {
 		return "📋"
 	case "profile":
 		return "👤"
+	case "market":
+		return "📈"
 	case "rpg":
 		return "⚔️"
 	case "confess":

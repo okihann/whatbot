@@ -31,8 +31,8 @@ func TestHelpAndMenuRegistrationAndRendering(t *testing.T) {
 		t.Errorf("expected 'owner' category in owner menuCategories, got %v", ownerCats)
 	}
 
-	mainText := renderMainMenu("Whatbot", "/", "Alice", userCats)
-	for _, want := range []string{"*Whatbot*", "Alice", "Downloader", "Tools", "Media", "*0.* 📜 Show All Commands"} {
+	mainText := renderMainMenu("NopeBot", "/", "Alice", userCats)
+	for _, want := range []string{"*NopeBot*", "Alice", "Downloader", "Tools", "Media", "*0.* 📜 Show All Commands"} {
 		if !strings.Contains(mainText, want) {
 			t.Errorf("main menu missing %q:\n%s", want, mainText)
 		}

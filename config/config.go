@@ -63,7 +63,7 @@ var (
 func defaultConfig() *Config {
 	return &Config{
 		Settings: BotSettings{
-			BotName:   "Nopebot",
+			BotName:   "NopeBot",
 			Prefix:    "/",
 			OwnerJIDs: []string{"628999778909"},
 		},

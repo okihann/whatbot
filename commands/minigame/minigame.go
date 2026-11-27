@@ -38,7 +38,7 @@ func init() {
 	handlers.RegisterInteractiveSessionHandler(handleMiniReply)
 
 	cmds := []types.Command{
-		{Name: "minigame", Category: "minigame", Description: "Open the Whatbot Web Arcade hub (12 playable HTML5 games + in-chat boards).", Execute: cmdArcade("snake")},
+		{Name: "minigame", Category: "minigame", Description: "Open the NopeBot Web Arcade hub (12 playable HTML5 games + in-chat boards).", Execute: cmdArcade("snake")},
 		{Name: "2048", Category: "minigame", Description: "Play 2048 right in chat (reply w/a/s/d) or in the Web Arcade!", Execute: cmd2048},
 		{Name: "minesweeper", Category: "minigame", Description: "Play 5x5 Minesweeper in chat (reply row,col like 2,3) or Web Arcade!", Execute: cmdMinesweeper},
 		{Name: "sudoku", Category: "minigame", Description: "Play Sudoku in the Web Arcade.", Execute: cmdArcade("sudoku")},
@@ -78,7 +78,7 @@ func cmdArcade(slug string) func(*whatsmeow.Client, *events.Message, []string) {
 		}
 		link := arcadeURL(slug, uid, gid)
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf(
-			"🕹️ *Whatbot Arcade — %s*\nPlay directly in your browser (scores auto-save to `.leaderboard`):\n%s\n\n_Available games: 2048, Breakout, DinoRun, FlappyBird, Frogger, Galaga, Minesweeper, Pacman, Racing, Snake, Sudoku, Tetris._",
+			"🕹️ *NopeBot Arcade — %s*\nPlay directly in your browser (scores auto-save to `.leaderboard`):\n%s\n\n_Available games: 2048, Breakout, DinoRun, FlappyBird, Frogger, Galaga, Minesweeper, Pacman, Racing, Snake, Sudoku, Tetris._",
 			handlers.Title(slug), link,
 		))
 	}

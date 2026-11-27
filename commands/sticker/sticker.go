@@ -62,7 +62,7 @@ func cmdQC(client *whatsmeow.Client, msg *events.Message, args []string) {
 		utils.SendReply(client, msg.Info.Chat, "❌ Quote card render failed: "+err.Error())
 		return
 	}
-	webpBytes, err := utils.ConvertImageToWebP(pngBytes, false, "Whatbot QC", name)
+	webpBytes, err := utils.ConvertImageToWebP(pngBytes, false, "NopeBot QC", name)
 	if err != nil {
 		_, _ = utils.SendImageData(context.Background(), client, msg.Info.Chat, pngBytes, "image/png", "")
 		return
@@ -205,7 +205,7 @@ func cmdEmojiMix(client *whatsmeow.Client, msg *events.Message, args []string) {
 		utils.SendReply(client, msg.Info.Chat, "❌ That emoji combination isn't available in Emoji Kitchen. Try common emojis like `😂+🔥` or `😎+🐱`.")
 		return
 	}
-	webpBytes, err := utils.ConvertImageToWebP(imgBytes, false, "EmojiMix", "Whatbot")
+	webpBytes, err := utils.ConvertImageToWebP(imgBytes, false, "EmojiMix", "NopeBot")
 	if err != nil {
 		_, _ = utils.SendImageData(ctx, client, msg.Info.Chat, imgBytes, "image/png", "")
 		return
@@ -285,7 +285,7 @@ func cmdToImage(client *whatsmeow.Client, msg *events.Message, args []string) {
 		return
 	}
 	defer cleanup()
-	tmpDir, _ := os.MkdirTemp("", "whatbot-toimg-*")
+	tmpDir, _ := os.MkdirTemp("", "nopebot-toimg-*")
 	defer os.RemoveAll(tmpDir)
 	inPath := filepath.Join(tmpDir, "in.webp")
 	outPath := filepath.Join(tmpDir, "out.png")
@@ -317,7 +317,7 @@ func cmdToVideo(client *whatsmeow.Client, msg *events.Message, args []string) {
 		return
 	}
 	defer cleanup()
-	tmpDir, _ := os.MkdirTemp("", "whatbot-tovid-*")
+	tmpDir, _ := os.MkdirTemp("", "nopebot-tovid-*")
 	defer os.RemoveAll(tmpDir)
 	inPath := filepath.Join(tmpDir, "in.webp")
 	outPath := filepath.Join(tmpDir, "out.mp4")
@@ -372,7 +372,7 @@ func cmdStickerPack(client *whatsmeow.Client, msg *events.Message, args []string
 		if err != nil || len(img) < 500 {
 			continue
 		}
-		webp, err := utils.ConvertImageToWebP(img, false, "StickerPack", "Whatbot")
+		webp, err := utils.ConvertImageToWebP(img, false, "StickerPack", "NopeBot")
 		if err != nil {
 			continue
 		}

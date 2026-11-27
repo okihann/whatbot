@@ -10,10 +10,10 @@ import (
 )
 
 // TestLiveDownloaders runs end-to-end checks against Pinterest, YouTube, and
-// TikTok when WHATBOT_LIVE_TESTS=1 is set in the environment.
+// TikTok when NOPEBOT_LIVE_TESTS=1 is set in the environment.
 func TestLiveDownloaders(t *testing.T) {
-	if os.Getenv("WHATBOT_LIVE_TESTS") != "1" {
-		t.Skip("set WHATBOT_LIVE_TESTS=1 to run live network integration tests")
+	if os.Getenv("NOPEBOT_LIVE_TESTS") != "1" {
+		t.Skip("set NOPEBOT_LIVE_TESTS=1 to run live network integration tests")
 	}
 
 	t.Run("PinterestSearch", func(t *testing.T) {

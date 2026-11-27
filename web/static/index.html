@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Whatbot Web — Android Companion</title>
+<title>NopeBot Web — Android Companion</title>
 <style>
   :root {
     --bg-app: #0b141a;
@@ -184,7 +184,7 @@
       <div class="brand-row">
         <div class="brand">
           <span class="brand-dot" id="sseDot" title="Live event stream"></span>
-          <span>Whatbot Web</span>
+          <span>NopeBot Web</span>
         </div>
         <div class="badges">
           <span class="badge green" id="platformBadge">Android Companion • View-Once</span>
@@ -314,7 +314,7 @@
 <div class="modal-backdrop" id="authModal">
   <div class="modal">
     <h3>Authentication Required</h3>
-    <p>Enter your <code>WEB_PASSWORD</code> to unlock Whatbot Web.</p>
+    <p>Enter your <code>WEB_PASSWORD</code> to unlock NopeBot Web.</p>
     <input type="password" id="authPasswordInput" placeholder="Password">
     <div class="modal-actions">
       <button class="btn-sm primary" id="authSubmitBtn">Unlock</button>
@@ -336,7 +336,7 @@
 <script>
 (() => {
   const state = {
-    password: localStorage.getItem('whatbot_web_password') || '',
+    password: localStorage.getItem('nopebot_web_password') || '',
     accounts: [],
     account: '',
     filter: 'all',
@@ -936,7 +936,7 @@
 
   $('authSubmitBtn').addEventListener('click', async () => {
     state.password = $('authPasswordInput').value.trim();
-    localStorage.setItem('whatbot_web_password', state.password);
+    localStorage.setItem('nopebot_web_password', state.password);
     $('authModal').classList.remove('show');
     connectSSE();
     await loadAccounts();

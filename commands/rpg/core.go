@@ -162,11 +162,25 @@ func cmdRPGProfile(client *whatsmeow.Client, msg *events.Message, args []string)
 		rem := time.Until(time.UnixMilli(p.RaidProtectionUntil)).Round(time.Minute)
 		shieldTxt = fmt.Sprintf("🛡️ %s", rem)
 	}
+	zone, _ := rpg.GetZone(p.Location)
+	zoneName := zone.Name
+	if isID(client, msg) {
+		zoneName = zone.NameID
+	}
+	petTxt := "-"
+	if pet := rpg.GetEquippedPet(p); pet != nil {
+		petTxt = fmt.Sprintf("%s (Lv.%d)", pet.Name, pet.Level)
+	}
+	titleTag := ""
+	if p.Title != "" {
+		titleTag = fmt.Sprintf(" [%s]", p.Title)
+	}
 
 	var b strings.Builder
 	if isID(client, msg) {
-		fmt.Fprintf(&b, "👑 *KERAJAAN %s*\n", strings.ToUpper(p.Name))
-		fmt.Fprintf(&b, "_Penguasa Lv.%d (%d/%d XP) | Kekayaan: ¥%d_\n\n", p.Level, p.XP, p.Level*120, p.NetWorth)
+		fmt.Fprintf(&b, "👑 *KERAJAAN %s*%s\n", strings.ToUpper(p.Name), titleTag)
+		fmt.Fprintf(&b, "_Penguasa Lv.%d (%d/%d XP) | Kekayaan: ¥%d_\n", p.Level, p.XP, p.Level*120, p.NetWorth)
+		fmt.Fprintf(&b, "🗺️ Lokasi: *%s* (`%s`)\n\n", zoneName, zone.ID)
 		fmt.Fprintf(&b, "⚡ Energi: `%d/%d` | ❤️ HP: `%d/%d` | 🔮 MP: `%d/%d`\n", p.Energy.Current, p.Energy.Max, p.Character.Stats.Health, p.Character.Stats.MaxHealth, p.Character.Stats.Mana, p.Character.Stats.MaxMana)
 		fmt.Fprintf(&b, "💴 Yen: `¥%d` | 🏦 Bank: `¥%d / ¥%d`\n\n", p.Currency[rpg.Yen], p.Bank.Balance, rpg.EffectiveBankCapacity(p))
 		b.WriteString("📦 *SUMBER DAYA*\n")
@@ -174,10 +188,12 @@ func cmdRPGProfile(client *whatsmeow.Client, msg *events.Message, args []string)
 		fmt.Fprintf(&b, "🪙 Emas: `%d` | 💚 Zamrud: `%d` | 💎 Berlian: `%d`\n\n", p.Resources[rpg.Gold], p.Resources[rpg.Emerald], p.Resources[rpg.Diamond])
 		b.WriteString("⚔️ *HERO & PASUKAN*\n")
 		fmt.Fprintf(&b, "• Hero ATK/DEF: `%d / %d` | Senjata: *%s* | Armor: *%s*\n", heroAtk, heroDef, weapon, armor)
+		fmt.Fprintf(&b, "• Pet: *%s* | Poin Stat: `%d` (`.alloc`)\n", petTxt, p.StatPoints)
 		fmt.Fprintf(&b, "• Pasukan ATK/DEF: `%d / %d` | Bangunan: `%d` | Perisai: %s\n", armyAtk, armyDef, len(p.Buildings), shieldTxt)
 	} else {
-		fmt.Fprintf(&b, "👑 *EMPIRE OF %s*\n", strings.ToUpper(p.Name))
-		fmt.Fprintf(&b, "_Level %d Ruler (%d/%d XP) | Net Worth: ¥%d_\n\n", p.Level, p.XP, p.Level*120, p.NetWorth)
+		fmt.Fprintf(&b, "👑 *EMPIRE OF %s*%s\n", strings.ToUpper(p.Name), titleTag)
+		fmt.Fprintf(&b, "_Level %d Ruler (%d/%d XP) | Net Worth: ¥%d_\n", p.Level, p.XP, p.Level*120, p.NetWorth)
+		fmt.Fprintf(&b, "🗺️ Location: *%s* (`%s`)\n\n", zoneName, zone.ID)
 		fmt.Fprintf(&b, "⚡ Energy: `%d/%d` | ❤️ HP: `%d/%d` | 🔮 MP: `%d/%d`\n", p.Energy.Current, p.Energy.Max, p.Character.Stats.Health, p.Character.Stats.MaxHealth, p.Character.Stats.Mana, p.Character.Stats.MaxMana)
 		fmt.Fprintf(&b, "💴 Yen: `¥%d` | 🏦 Bank: `¥%d / ¥%d`\n\n", p.Currency[rpg.Yen], p.Bank.Balance, rpg.EffectiveBankCapacity(p))
 		b.WriteString("📦 *RESOURCES*\n")
@@ -185,6 +201,7 @@ func cmdRPGProfile(client *whatsmeow.Client, msg *events.Message, args []string)
 		fmt.Fprintf(&b, "🪙 Gold: `%d` | 💚 Emerald: `%d` | 💎 Diamond: `%d`\n\n", p.Resources[rpg.Gold], p.Resources[rpg.Emerald], p.Resources[rpg.Diamond])
 		b.WriteString("⚔️ *HERO & ARMY*\n")
 		fmt.Fprintf(&b, "• Hero ATK/DEF: `%d / %d` | Weapon: *%s* | Armor: *%s*\n", heroAtk, heroDef, weapon, armor)
+		fmt.Fprintf(&b, "• Pet: *%s* | Stat Points: `%d` (`.alloc`)\n", petTxt, p.StatPoints)
 		fmt.Fprintf(&b, "• Army ATK/DEF: `%d / %d` | Buildings: `%d` | Shield: %s\n", armyAtk, armyDef, len(p.Buildings), shieldTxt)
 	}
 

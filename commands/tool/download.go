@@ -75,7 +75,7 @@ func downloadGenericMedia(client *whatsmeow.Client, chatJID waTypes.JID, targetU
 		title = "Downloaded Media"
 	}
 
-	workDir, err := os.MkdirTemp("", "whatbot-dl-cmd-*")
+	workDir, err := os.MkdirTemp("", "nopebot-dl-cmd-*")
 	if err != nil {
 		utils.SendReply(client, chatJID, "❌ Could not create temporary workspace.")
 		return

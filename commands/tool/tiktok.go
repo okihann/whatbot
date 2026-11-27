@@ -165,7 +165,7 @@ func downloadAndSendTikTokDirect(ctx context.Context, client *whatsmeow.Client, 
 		return err
 	}
 
-	workDir, err := os.MkdirTemp("", "whatbot-tt-*")
+	workDir, err := os.MkdirTemp("", "nopebot-tt-*")
 	if err != nil {
 		return err
 	}
@@ -206,7 +206,7 @@ func downloadTikTokViaYtDlp(ctx context.Context, client *whatsmeow.Client, chatJ
 		title = "TikTok Video"
 	}
 
-	workDir, err := os.MkdirTemp("", "whatbot-tt-yt-*")
+	workDir, err := os.MkdirTemp("", "nopebot-tt-yt-*")
 	if err != nil {
 		utils.SendReply(client, chatJID, "⚠️ Could not prepare temporary directory.")
 		return

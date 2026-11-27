@@ -372,7 +372,7 @@ func downloadAndSendPinterestVideoURL(ctx context.Context, client *whatsmeow.Cli
 		return err
 	}
 
-	workDir, err := os.MkdirTemp("", "whatbot-pin-*")
+	workDir, err := os.MkdirTemp("", "nopebot-pin-*")
 	if err != nil {
 		return err
 	}
@@ -397,7 +397,7 @@ func downloadAndSendPinterestVideoURL(ctx context.Context, client *whatsmeow.Cli
 }
 
 func downloadPinterestViaYtDlp(ctx context.Context, client *whatsmeow.Client, chatJID waTypes.JID, pinURL, caption string) error {
-	workDir, err := os.MkdirTemp("", "whatbot-pin-yt-*")
+	workDir, err := os.MkdirTemp("", "nopebot-pin-yt-*")
 	if err != nil {
 		return err
 	}

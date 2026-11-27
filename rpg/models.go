@@ -39,6 +39,45 @@ type Player struct {
 	GuildID             string             `json:"guildId"`
 	Quest               DailyQuestState    `json:"quest"`
 	LastRegenUnix       int64              `json:"lastRegenUnix"`
+	Location            string             `json:"location"`
+	VisitedZones        map[string]bool    `json:"visitedZones"`
+	StatPoints          int                `json:"statPoints"`
+	GachaPityEpic       int                `json:"gachaPityEpic"`
+	GachaPityLegend     int                `json:"gachaPityLegend"`
+	GachaTotalPulls     int                `json:"gachaTotalPulls"`
+	Pets                []Pet              `json:"pets"`
+	EquippedPet         string             `json:"equippedPet"`
+	Relics              []string           `json:"relics"`
+	Title               string             `json:"title"`
+	UnlockedTitles      []string           `json:"unlockedTitles"`
+	MonstersSlain       int                `json:"monstersSlain"`
+	DungeonsCleared     int                `json:"dungeonsCleared"`
+	RaidsWon            int                `json:"raidsWon"`
+	WorldBossDamage     int64              `json:"worldBossDamage"`
+}
+
+type Pet struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Rarity      string `json:"rarity"` // Rare, Epic, Legendary, Mythic
+	Level       int    `json:"level"`
+	XP          int    `json:"xp"`
+	BonusATK    int    `json:"bonusAtk"`
+	BonusDEF    int    `json:"bonusDef"`
+	BonusYenPct int    `json:"bonusYenPct"`
+	BonusXPPct  int    `json:"bonusXpPct"`
+}
+
+type WorldBoss struct {
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	Zone         string           `json:"zone"`
+	HP           int64            `json:"hp"`
+	MaxHP        int64            `json:"maxHp"`
+	RewardPool   int64            `json:"rewardPool"`
+	Contributors map[string]int64 `json:"contributors"`
+	Defeated     bool             `json:"defeated"`
+	SpawnedAt    int64            `json:"spawnedAt"`
 }
 
 type Energy struct {
@@ -58,11 +97,13 @@ type Bank struct {
 }
 
 type Cooldowns struct {
-	LastRaid    int64 `json:"lastRaid"`
-	LastJob     int64 `json:"lastJob"`
-	LastHunt    int64 `json:"lastHunt"`
-	LastMine    int64 `json:"lastMine"`
-	LastDungeon int64 `json:"lastDungeon"`
+	LastRaid      int64 `json:"lastRaid"`
+	LastJob       int64 `json:"lastJob"`
+	LastHunt      int64 `json:"lastHunt"`
+	LastMine      int64 `json:"lastMine"`
+	LastDungeon   int64 `json:"lastDungeon"`
+	LastExplore   int64 `json:"lastExplore"`
+	LastWorldBoss int64 `json:"lastWorldBoss"`
 }
 
 type Character struct {

@@ -272,7 +272,7 @@ func TestSequentialPairingAndGamesWebRoutes(t *testing.T) {
 	}
 	gameBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(gameBody), "Whatbot Arcade") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(gameBody), "NopeBot Arcade") {
 		t.Fatalf("unexpected games page: status=%d", resp.StatusCode)
 	}
 

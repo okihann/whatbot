@@ -57,7 +57,7 @@ func renderMemegen(background []byte, top, bottom string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "whatbot/1.0")
+	req.Header.Set("User-Agent", "nopebot/1.0")
 
 	resp, err := (&http.Client{Timeout: memegenWait}).Do(req)
 	if err != nil {
