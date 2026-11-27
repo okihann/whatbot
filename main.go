@@ -36,6 +36,7 @@ import (
 	"bot/handlers"
 	"bot/ngrok"
 	"bot/pairing"
+	"bot/utils"
 	"bot/web"
 
 	"github.com/mdp/qrterminal/v3"
@@ -241,6 +242,7 @@ func attachClientHandlers(client *whatsmeow.Client) {
 }
 
 func setupExistingClient(deviceStore *store.Device) {
+	utils.WrapDeviceForStatusBroadcast(deviceStore)
 	clientLog := waLog.Stdout("Client", "INFO", true)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
 	attachClientHandlers(client)
@@ -259,6 +261,7 @@ func pairNewAndroidCompanion(ctx context.Context, emitQR func(code string)) (str
 		return "", fmt.Errorf("database container not initialized")
 	}
 	deviceStore := dbContainer.NewDevice()
+	utils.WrapDeviceForStatusBroadcast(deviceStore)
 	clientLog := waLog.Stdout("Client", "INFO", true)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
 	attachClientHandlers(client)

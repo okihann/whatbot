@@ -49,7 +49,7 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 		// Build the exact revocation protocol message
 		revokeMsg := client.BuildRevoke(statusJID, ownJID, statusID)
 
-		_, err := client.SendMessage(context.Background(), statusJID, revokeMsg)
+		_, err := utils.SendStatusBroadcast(context.Background(), client, revokeMsg)
 		if err != nil {
 			utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("❌ Failed to delete status: %v", err))
 		} else {
@@ -59,7 +59,6 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 	}
 
 	caption := strings.Join(args, " ")
-	statusJID := waTypes.NewJID("status", "broadcast")
 
 	var imgMsg *waE2E.ImageMessage
 	var vidMsg *waE2E.VideoMessage
@@ -176,13 +175,26 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 			}
 
 			tempDir := "temp"
-			os.MkdirAll(tempDir, 0755)
+			_ = os.MkdirAll(tempDir, 0755)
 
-			tempPath := filepath.Join(tempDir, fmt.Sprintf("status_vid_%d.mp4", time.Now().UnixNano()))
-			os.WriteFile(tempPath, data, 0644)
+			tempPath := filepath.Join(tempDir, fmt.Sprintf("status_vid_%d.bin", time.Now().UnixNano()))
+			_ = os.WriteFile(tempPath, data, 0644)
 			defer os.Remove(tempPath)
 
-			jpegThumb, seconds := utils.ExtractVideoMeta(tempPath)
+			metaPath := tempPath
+			outMime := "video/mp4"
+			if !strings.EqualFold(mime, "video/mp4") {
+				mp4Path := tempPath + ".mp4"
+				if utils.EnsureWhatsAppStatusMP4(tempPath, mp4Path, mime) {
+					defer os.Remove(mp4Path)
+					if converted, readErr := os.ReadFile(mp4Path); readErr == nil && len(converted) > 0 {
+						data = converted
+						metaPath = mp4Path
+					}
+				}
+			}
+
+			jpegThumb, seconds := utils.ExtractVideoMeta(metaPath)
 
 			uploaded, err := client.Upload(context.Background(), data, whatsmeow.MediaVideo)
 			if err != nil {
@@ -195,7 +207,7 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 					URL:           proto.String(uploaded.URL),
 					DirectPath:    proto.String(uploaded.DirectPath),
 					MediaKey:      uploaded.MediaKey,
-					Mimetype:      proto.String(mime),
+					Mimetype:      proto.String(outMime),
 					FileSHA256:    uploaded.FileSHA256,
 					FileEncSHA256: uploaded.FileEncSHA256,
 					FileLength:    proto.Uint64(uploaded.FileLength),
@@ -248,7 +260,7 @@ func executeStatus(client *whatsmeow.Client, msg *events.Message, args []string)
 		}
 	}
 
-	resp, err := client.SendMessage(context.Background(), statusJID, statusMsg)
+	resp, err := utils.SendStatusBroadcast(context.Background(), client, statusMsg)
 
 	if err != nil {
 		utils.SendReply(client, msg.Info.Chat, fmt.Sprintf("❌ Failed to send status: %v", err))

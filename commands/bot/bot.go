@@ -477,6 +477,7 @@ func cmdSetPrivacy(client *whatsmeow.Client, msg *events.Message, args []string)
 func cmdStatusPost(client *whatsmeow.Client, msg *events.Message, args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	statusCtx := utils.WithStatusPNOnlyContacts(ctx)
 	statusJID := waTypes.StatusBroadcastJID
 	caption := strings.TrimSpace(strings.Join(args, " "))
 
@@ -488,9 +489,9 @@ func cmdStatusPost(client *whatsmeow.Client, msg *events.Message, args []string)
 			return
 		}
 		if quoted.GetImageMessage() != nil {
-			_, err = utils.SendImageData(ctx, client, statusJID, data, mimeType, caption)
+			_, err = utils.SendImageData(statusCtx, client, statusJID, data, mimeType, caption)
 		} else {
-			_, err = utils.SendVideoData(ctx, client, statusJID, data, caption, 0, nil)
+			_, err = utils.SendVideoData(statusCtx, client, statusJID, data, caption, 0, nil)
 		}
 		if err != nil {
 			utils.SendReply(client, msg.Info.Chat, "❌ Status post failed: "+err.Error())
@@ -504,7 +505,7 @@ func cmdStatusPost(client *whatsmeow.Client, msg *events.Message, args []string)
 		utils.SendReply(client, msg.Info.Chat, "Usage: `.statuspost <text>` or reply to an image/video.")
 		return
 	}
-	_, err := client.SendMessage(ctx, statusJID, &waE2E.Message{
+	_, err := utils.SendStatusBroadcast(ctx, client, &waE2E.Message{
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
 			Text:           proto.String(caption),
 			BackgroundArgb: proto.Uint32(0xFF005C4B),
