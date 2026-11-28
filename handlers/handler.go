@@ -105,6 +105,48 @@ func SetStartTime(t time.Time) {
 	botStartTime = t
 }
 
+// builtinCommandAliases attaches popular Indonesian and short aliases to their
+// canonical primary commands without duplicating rows in .menu.
+var builtinCommandAliases = map[string][]string{
+	"profile":       {"me"},
+	"ping":          {"runtime"},
+	"fact":          {"faktaunik"},
+	"gempa":         {"infogempa"},
+	"upload":        {"tourl"},
+	"encode":        {"enc"},
+	"decode":        {"dec"},
+	"b64":           {"ebase64", "dbase64"},
+	"hex":           {"ehex", "dhex"},
+	"qc":            {"qcwa"},
+	"soundsticker":  {"stickeraudio"},
+	"getexif":       {"stickerinfo"},
+	"status":        {"upsw"},
+	"channelpost":   {"upchannel"},
+	"selfmode":      {"self"},
+	"groupmode":     {"onlygroup"},
+	"setbotname":    {"setnamebot"},
+	"setpp":         {"setppbot"},
+	"premium":       {"addprem"},
+	"gostats":       {"memori"},
+	"anti-delete":   {"antidelete", "antideletepc"},
+	"antivo":        {"antiviewonce"},
+	"antibug":       {"antivirtex"},
+	"attendance":    {"absen", "mulaiabsen", "cekabsen", "delabsen"},
+	"unpinmsg":      {"unpin"},
+	"joinreq":       {"reqjoin"},
+	"schedulegroup": {"groupschedule"},
+	"sider":         {"listpasif"},
+	"mutemember":    {"mute"},
+	"banchat":       {"ban"},
+	"unbanchat":     {"unban"},
+	"banlist":       {"listban"},
+	"listwarning":   {"listwarn"},
+	"warnings":      {"cekwarn"},
+	"badword":       {"antibadword", "addbadword", "delbadword", "listbadword"},
+	"autorespon":    {"addrespon", "delrespon", "listrespon", "resetrespon"},
+	"leavegroup":    {"leave"},
+}
+
 // RegisterCommand adds a new command (and any lowercase aliases) to the registry,
 // normalizing its category into one of the 9 canonical groups and ensuring all
 // owner-only commands live under the hidden "owner" category.
@@ -120,6 +162,18 @@ func RegisterCommand(cmd types.Command) {
 		cmd.OwnerOnly = true
 	}
 	cmd.Description = i18n.CommandDescription(i18n.LangEN, cmd.Name, cmd.Description)
+	if extras, ok := builtinCommandAliases[name]; ok {
+		seen := make(map[string]bool, len(cmd.Aliases)+len(extras))
+		for _, a := range cmd.Aliases {
+			seen[strings.ToLower(strings.TrimSpace(a))] = true
+		}
+		for _, a := range extras {
+			if !seen[a] && a != name {
+				cmd.Aliases = append(cmd.Aliases, a)
+				seen[a] = true
+			}
+		}
+	}
 	Commands[name] = cmd
 	PrimaryCommands[name] = cmd
 	for _, alias := range cmd.Aliases {

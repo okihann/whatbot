@@ -40,9 +40,35 @@ func init() {
 		Name:        "audioeffect",
 		Aliases:     []string{"audiofx", "afx"},
 		Category:    "media",
-		Description: "Apply studio FFmpeg audio effects to a replied audio/video. Usage: .audioeffect <bass|blown|deep|earrape|fast|fat|nightcore|reverse|robot|slow|squirrel|8d|echo>",
+		Description: "Apply FFmpeg audio effects (bass, nightcore, 8d, robot, etc.) to replied media.",
 		Execute:     cmdAudioEffect,
 	})
+	shortcuts := []struct {
+		name   string
+		preset string
+	}{
+		{"bass", "bass"},
+		{"blown", "blown"},
+		{"deep", "deep"},
+		{"earrape", "earrape"},
+		{"fast", "fast"},
+		{"fat", "fat"},
+		{"nightcore", "nightcore"},
+		{"robot", "robot"},
+		{"slow", "slow"},
+		{"tupai", "squirrel"},
+	}
+	for _, sc := range shortcuts {
+		preset := sc.preset
+		handlers.RegisterCommand(types.Command{
+			Name:        sc.name,
+			Category:    "media",
+			Description: fmt.Sprintf("Apply %s audio effect to replied audio/video.", sc.name),
+			Execute: func(client *whatsmeow.Client, msg *events.Message, args []string) {
+				cmdAudioEffect(client, msg, []string{preset})
+			},
+		})
+	}
 }
 
 func cmdAudioEffect(client *whatsmeow.Client, msg *events.Message, args []string) {

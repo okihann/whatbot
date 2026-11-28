@@ -217,6 +217,17 @@ func CommandDescription(lang, cmdName, fallbackEN string) string {
 	return strings.TrimSpace(fallbackEN)
 }
 
+// HasBilingualCommandDescription reports whether cmdName has both non-empty EN
+// and ID descriptions registered in the refined command catalog.
+func HasBilingualCommandDescription(cmdName string) (hasEN, hasID bool) {
+	key := strings.ToLower(strings.TrimSpace(cmdName))
+	entry, ok := commandDescriptions[key]
+	if !ok {
+		return false, false
+	}
+	return strings.TrimSpace(entry.EN) != "", strings.TrimSpace(entry.ID) != ""
+}
+
 var commandDescriptions = map[string]CommandDesc{
 	// ==================== GENERAL & PROFILE ====================
 	"help":           {EN: "Open the interactive command menu. Usage: .menu [category|command|all]", ID: "Buka menu perintah interaktif. Contoh: .menu [kategori|perintah|all]"},
@@ -576,4 +587,140 @@ var commandDescriptions = map[string]CommandDesc{
 	"trackbot":          {EN: "List all active linked bot tenants and QR queue status.", ID: "Lihat semua akun bot aktif dan status antrean QR."},
 	"eval":              {EN: "Evaluate message properties for debugging.", ID: "Evaluasi properti pesan untuk debugging."},
 	"ytversion":         {EN: "Check the embedded yt-dlp version.", ID: "Cek versi yt-dlp yang tertanam di bot."},
+
+	// ==================== NEWLY ADDED COMMANDS ====================
+	// General
+	"ai":        {EN: "Ask the configured AI assistant anything. Usage: .ai <question>", ID: "Tanya apa saja ke asisten AI. Contoh: .ai <pertanyaan>"},
+	"transfer":  {EN: "Transfer coins to another user. Usage: .transfer @user <amount>", ID: "Transfer koin ke pengguna lain. Contoh: .transfer @user <jumlah>"},
+	"report":    {EN: "Send a bug report or feedback to the bot owner. Usage: .report <message>", ID: "Kirim laporan bug atau saran ke pemilik bot. Contoh: .report <pesan>"},
+	"changelog": {EN: "Show recent NopeBot updates and features.", ID: "Tampilkan daftar pembaruan dan fitur terbaru NopeBot."},
+
+	// Anime
+	"quotesanime": {EN: "Get a random iconic anime quote.", ID: "Tampilkan kutipan ikonik anime secara acak."},
+	"randomanime": {EN: "Get a random anime recommendation with synopsis and score.", ID: "Dapatkan rekomendasi anime acak lengkap dengan sinopsis dan skor."},
+
+	// Media, Stickers, Audio FX & Makers
+	"bass":       {EN: "Apply heavy bass boost audio effect to replied media.", ID: "Tambahkan efek bass kuat pada audio/video yang dibalas."},
+	"blown":      {EN: "Apply distorted blown speaker audio effect to replied media.", ID: "Tambahkan efek speaker pecah (blown) pada audio/video yang dibalas."},
+	"deep":       {EN: "Apply deep pitched voice audio effect to replied media.", ID: "Ubah suara audio/video yang dibalas menjadi lebih berat (deep)."},
+	"earrape":    {EN: "Apply ultra-loud earrape audio effect to replied media.", ID: "Tambahkan efek suara super keras (earrape) pada audio/video yang dibalas."},
+	"fast":       {EN: "Speed up replied audio or video.", ID: "Percepat tempo audio atau video yang dibalas."},
+	"fat":        {EN: "Apply thick fat audio effect to replied media.", ID: "Tambahkan efek suara tebal (fat) pada audio/video yang dibalas."},
+	"nightcore":  {EN: "Apply nightcore speed+pitch effect to replied media.", ID: "Terapkan efek nightcore pada audio/video yang dibalas."},
+	"robot":      {EN: "Apply robotic voice audio effect to replied media.", ID: "Ubah suara audio/video yang dibalas menjadi suara robot."},
+	"slow":       {EN: "Slow down replied audio or video.", ID: "Perlambat tempo audio atau video yang dibalas."},
+	"tupai":      {EN: "Apply high-pitched squirrel/chipmunk audio effect.", ID: "Ubah suara audio/video yang dibalas menjadi suara tupai (chipmunk)."},
+	"soundcloud": {EN: "Download a SoundCloud track as MP3. Usage: .soundcloud <url>", ID: "Unduh lagu SoundCloud dalam format MP3. Contoh: .soundcloud <tautan>"},
+	"tiktokmp3":  {EN: "Extract MP3 audio from a TikTok link. Usage: .tiktokmp3 <url>", ID: "Ekstrak audio MP3 dari tautan TikTok. Contoh: .tiktokmp3 <tautan>"},
+	"hd":         {EN: "Upscale and sharpen a replied image to 2x HD.", ID: "Tingkatkan ketajaman dan resolusi gambar yang dibalas ke 2x HD."},
+	"tovn":       {EN: "Convert replied audio or video to a WhatsApp voice note.", ID: "Ubah audio atau video yang dibalas menjadi pesan suara (VN)."},
+	"toviewonce": {EN: "Resend a replied photo or video as View-Once.", ID: "Kirim ulang foto atau video yang dibalas sebagai Sekali Lihat."},
+	"toptv":      {EN: "Convert a replied short video into a circular Video Note.", ID: "Ubah video pendek yang dibalas menjadi Video Note bulat (PTV)."},
+	"scircle":    {EN: "Convert a replied image into a circular WebP sticker.", ID: "Ubah gambar yang dibalas menjadi stiker bulat WebP."},
+	"ttp":        {EN: "Create a clean text-to-sticker WebP. Usage: .ttp <text>", ID: "Buat stiker teks bersih dari tulisan. Contoh: .ttp <teks>"},
+	"attp":       {EN: "Create an animated rainbow text sticker. Usage: .attp <text>", ID: "Buat stiker teks pelangi bergerak. Contoh: .attp <teks>"},
+	"brat":       {EN: "Generate a classic lime-green Brat text sticker. Usage: .brat <text>", ID: "Buat stiker teks Brat hijau limau klasik. Contoh: .brat <teks>"},
+	"swm":        {EN: "Change pack/author watermark of a replied sticker. Usage: .swm Pack | Author", ID: "Ubah watermark paket/pembuat stiker yang dibalas. Contoh: .swm Paket | Pembuat"},
+	"setwm":      {EN: "Save your default sticker watermark. Usage: .setwm Pack | Author", ID: "Simpan watermark stiker bawaanmu. Contoh: .setwm Paket | Pembuat"},
+	"resetwm":    {EN: "Reset your default sticker watermark to NopeBot.", ID: "Reset watermark stiker bawaanmu ke NopeBot."},
+	"hartatahta": {EN: "Generate a holographic 'HARTA TAHTA <NAME>' image. Usage: .hartatahta <name>", ID: "Buat gambar holografik 'HARTA TAHTA <NAMA>'. Contoh: .hartatahta <nama>"},
+	"iqcpink":    {EN: "Generate a pink aesthetic quote card. Usage: .iqcpink <text>", ID: "Buat kartu kutipan estetik warna pink. Contoh: .iqcpink <teks>"},
+	"fakereply":  {EN: "Generate a fake WhatsApp chat bubble image. Usage: .fakereply Name | Text", ID: "Buat gambar gelembung chat WhatsApp palsu. Contoh: .fakereply Nama | Pesan"},
+
+	// Tools & Search
+	"alquran":       {EN: "Read an Al-Quran verse with Arabic, ID & EN translations. Usage: .alquran <surah> [ayah]", ID: "Baca ayat Al-Quran beserta terjemahan ID & EN. Contoh: .alquran <surah> [ayat]"},
+	"alkitab":       {EN: "Look up a Bible verse. Usage: .alkitab <book chapter:verse>", ID: "Cari ayat Alkitab. Contoh: .alkitab John 3:16"},
+	"wiki":          {EN: "Search Wikipedia article summaries (ID/EN). Usage: .wiki <topic>", ID: "Cari ringkasan artikel Wikipedia (ID/EN). Contoh: .wiki <topik>"},
+	"infounsur":     {EN: "Look up a chemical element by symbol, name, or number. Usage: .infounsur Au", ID: "Cari info unsur kimia lewat simbol, nama, atau nomor atom. Contoh: .infounsur Au"},
+	"ipchecker":     {EN: "Check IP address geolocation, ISP, and ASN. Usage: .ipchecker <ip>", ID: "Cek lokasi geografis, ISP, dan ASN alamat IP. Contoh: .ipchecker <ip>"},
+	"shortlink":     {EN: "Shorten a long URL via TinyURL. Usage: .shortlink <url>", ID: "Perpendek tautan panjang lewat TinyURL. Contoh: .shortlink <tautan>"},
+	"ssweb":         {EN: "Capture a live screenshot of a website URL. Usage: .ssweb <url>", ID: "Ambil tangkapan layar situs web. Contoh: .ssweb <tautan>"},
+	"nulis":         {EN: "Write text onto a lined notebook paper image. Usage: .nulis <text>", ID: "Tulis teks di atas gambar kertas buku tulis bergaris. Contoh: .nulis <teks>"},
+	"kodebahasa":    {EN: "Show ISO language codes for .translate and .tts.", ID: "Tampilkan daftar kode bahasa ISO untuk .translate dan .tts."},
+	"reminder":      {EN: "Set or list timed reminders in this chat. Usage: .reminder 10m <msg> | list", ID: "Atur atau lihat pengingat berwaktu di chat ini. Contoh: .reminder 10m <pesan> | list"},
+	"delreminder":   {EN: "Delete an active reminder by ID. Usage: .delreminder <id>", ID: "Hapus pengingat aktif berdasarkan ID. Contoh: .delreminder <id>"},
+	"resetreminder": {EN: "Clear all active reminders in this chat.", ID: "Hapus semua pengingat aktif di chat ini."},
+	"cekperangkat":  {EN: "Detect the WhatsApp platform (Android/iOS/Web) of a replied message.", ID: "Deteksi perangkat WhatsApp (Android/iOS/Web) dari pesan yang dibalas."},
+
+	// Games, Fun & Ramalan
+	"alay":          {EN: "Convert text into Indonesian alay style. Usage: .alay <text>", ID: "Ubah teks ke gaya tulisan alay. Contoh: .alay <teks>"},
+	"halah":         {EN: "Replace all vowels with 'a'. Usage: .halah <text>", ID: "Ubah semua huruf vokal teks menjadi 'a'. Contoh: .halah <teks>"},
+	"heleh":         {EN: "Replace all vowels with 'e'. Usage: .heleh <text>", ID: "Ubah semua huruf vokal teks menjadi 'e'. Contoh: .heleh <teks>"},
+	"hilih":         {EN: "Replace all vowels with 'i'. Usage: .hilih <text>", ID: "Ubah semua huruf vokal teks menjadi 'i'. Contoh: .hilih <teks>"},
+	"holoh":         {EN: "Replace all vowels with 'o'. Usage: .holoh <text>", ID: "Ubah semua huruf vokal teks menjadi 'o'. Contoh: .holoh <teks>"},
+	"huluh":         {EN: "Replace all vowels with 'u'. Usage: .huluh <text>", ID: "Ubah semua huruf vokal teks menjadi 'u'. Contoh: .huluh <teks>"},
+	"apakah":        {EN: "Ask a yes/no magic 8-ball question. Usage: .apakah <question>", ID: "Tanya pertanyaan ya/tidak secara acak. Contoh: .apakah <pertanyaan>"},
+	"kapankah":      {EN: "Predict randomly when something will happen. Usage: .kapankah <question>", ID: "Ramal kapan suatu hal akan terjadi. Contoh: .kapankah <pertanyaan>"},
+	"siapakah":      {EN: "Pick a random group member to answer 'Who is...'. Usage: .siapakah <question>", ID: "Pilih anggota grup secara acak untuk pertanyaan 'Siapakah...'. Contoh: .siapakah <pertanyaan>"},
+	"rate":          {EN: "Rate anything from 0 to 100%. Usage: .rate <thing>", ID: "Beri nilai 0 sampai 100% untuk apa saja. Contoh: .rate <sesuatu>"},
+	"cekkhodam":     {EN: "Check someone's funny guardian spirit (khodam). Usage: .cekkhodam [name]", ID: "Cek khodam lucu seseorang hari ini. Contoh: .cekkhodam [nama]"},
+	"jadian":        {EN: "Randomly pair two members in this group as a couple.", ID: "Pasangkan dua anggota grup secara acak untuk seru-seruan."},
+	"randomnumber":  {EN: "Generate a random number in a range. Usage: .randomnumber [min] [max]", ID: "Hasilkan angka acak dalam rentang tertentu. Contoh: .randomnumber [min] [maks]"},
+	"randomtag":     {EN: "Tag a random member in this group.", ID: "Sebut (tag) satu anggota grup secara acak."},
+	"truth":         {EN: "Get a random Truth question.", ID: "Dapatkan pertanyaan Truth acak."},
+	"dare":          {EN: "Get a random Dare challenge.", ID: "Dapatkan tantangan Dare acak."},
+	"pantun":        {EN: "Get a random Indonesian pantun.", ID: "Tampilkan pantun Indonesia acak."},
+	"katabijak":     {EN: "Get a random wise quote.", ID: "Tampilkan kata bijak dan motivasi acak."},
+	"puisi":         {EN: "Get a short Indonesian poem.", ID: "Tampilkan puisi pendek."},
+	"meme":          {EN: "Fetch a random SFW meme image.", ID: "Kirim gambar meme lucu acak (SFW)."},
+	"ppcp":          {EN: "Get a pair of anime couple profile pictures.", ID: "Dapatkan sepasang foto profil couple anime."},
+	"zodiak":        {EN: "Check zodiac profile and daily luck. Usage: .zodiak <sign|DD-MM>", ID: "Cek karakter zodiak dan hoki harian. Contoh: .zodiak <zodiak|DD-MM>"},
+	"shio":          {EN: "Check Chinese Zodiac (Shio) by birth year. Usage: .shio <year>", ID: "Cek Shio dan elemen berdasarkan tahun lahir. Contoh: .shio <tahun>"},
+	"weton":         {EN: "Calculate Javanese Weton (Pasaran & Neptu). Usage: .weton <YYYY-MM-DD>", ID: "Hitung Weton Jawa (Pasaran & Neptu). Contoh: .weton <YYYY-MM-DD>"},
+	"artinama":      {EN: "Generate a fun personality reading for a name. Usage: .artinama <name>", ID: "Lihat ramalan arti nama seru. Contoh: .artinama <nama>"},
+	"kecocokannama": {EN: "Check compatibility score of two names. Usage: .kecocokannama A | B", ID: "Cek persentase kecocokan dua nama. Contoh: .kecocokannama A | B"},
+	"ramalanjodoh":  {EN: "Fun soulmate compatibility reading. Usage: .ramalanjodoh A | B", ID: "Ramalan kecocokan jodoh seru. Contoh: .ramalanjodoh A | B"},
+	"tafsirmimpi":   {EN: "Look up a dream interpretation. Usage: .tafsirmimpi <keyword>", ID: "Cari tafsir mimpi berdasarkan kata kunci. Contoh: .tafsirmimpi <kata>"},
+	"nohoki":        {EN: "Check lucky score of a number. Usage: .nohoki <number>", ID: "Cek skor keberuntungan suatu nomor. Contoh: .nohoki <nomor>"},
+	"family100":     {EN: "Play the Family 100 survey guessing game.", ID: "Main permainan tebak survei Family 100."},
+	"tebakemoji":    {EN: "Guess the movie or character from emoji clues.", ID: "Tebak film atau karakter dari petunjuk emoji."},
+	"tebaklogo":     {EN: "Guess the brand from its logo description.", ID: "Tebak merek terkenal dari deskripsi logonya."},
+	"tekateki":      {EN: "Solve a classic Indonesian riddle (Teka-Teki).", ID: "Jawab teka-teki logika seru."},
+	"susunkalimat":  {EN: "Rearrange shuffled words into a proper sentence.", ID: "Susun kata acak menjadi kalimat yang benar."},
+	"hint":          {EN: "Get a hint for the active game in this chat.", ID: "Dapatkan petunjuk untuk game yang sedang aktif di chat ini."},
+	"nyerah":        {EN: "Give up on the active game and reveal the answer.", ID: "Menyerah dari game aktif dan tampilkan jawabannya."},
+
+	// Group
+	"rules":      {EN: "View the rules for this group.", ID: "Lihat peraturan grup ini."},
+	"setrules":   {EN: "Set custom rules for this group. Usage: .setrules <text>", ID: "Atur peraturan khusus untuk grup ini. Contoh: .setrules <teks>"},
+	"delrules":   {EN: "Delete the custom rules for this group.", ID: "Hapus peraturan khusus grup ini."},
+	"vote":       {EN: "Start a vote session in this group. Usage: .vote <topic>", ID: "Mulai sesi voting di grup ini. Contoh: .vote <topik>"},
+	"upvote":     {EN: "Vote YES in the active group vote.", ID: "Pilih YA (upvote) pada voting grup yang aktif."},
+	"devote":     {EN: "Vote NO in the active group vote.", ID: "Pilih TIDAK (devote) pada voting grup yang aktif."},
+	"cekvote":    {EN: "Check the live tally of the active group vote.", ID: "Cek perolehan suara voting grup saat ini."},
+	"delvote":    {EN: "Close and delete the active group vote.", ID: "Tutup dan hapus sesi voting grup yang aktif."},
+	"poll":       {EN: "Create a native WhatsApp Poll. Usage: .poll Question | Opt1 | Opt2", ID: "Buat Polling WhatsApp asli. Contoh: .poll Pertanyaan | Opsi 1 | Opsi 2"},
+	"list":       {EN: "View saved store/info list items in this group. Usage: .list [key]", ID: "Lihat daftar info/produk yang tersimpan di grup. Contoh: .list [nama]"},
+	"addlist":    {EN: "Add an item to this group's list. Usage: .addlist key | response", ID: "Tambah item baru ke daftar grup. Contoh: .addlist kunci | isi"},
+	"updatelist": {EN: "Update an item in this group's list. Usage: .updatelist key | new text", ID: "Perbarui item yang ada di daftar grup. Contoh: .updatelist kunci | isi baru"},
+	"dellist":    {EN: "Delete an item from this group's list. Usage: .dellist <key>", ID: "Hapus item dari daftar grup. Contoh: .dellist <kunci>"},
+	"resetlist":  {EN: "Clear all saved list items in this group.", ID: "Hapus semua item daftar di grup ini."},
+	"proses":     {EN: "Send an 'Order In Progress' status card (reply to buyer).", ID: "Kirim kartu status 'Pesanan Diproses' (balas pesan pembeli)."},
+	"done":       {EN: "Send an 'Order Completed' status card (reply to buyer).", ID: "Kirim kartu status 'Pesanan Selesai' (balas pesan pembeli)."},
+	"batal":      {EN: "Send an 'Order Cancelled' status card (reply to buyer).", ID: "Kirim kartu status 'Pesanan Dibatalkan' (balas pesan pembeli)."},
+	"listadmin":  {EN: "List all admins of this group.", ID: "Tampilkan daftar semua admin grup ini."},
+	"kickme":     {EN: "Remove yourself from this group.", ID: "Keluarkan dirimu sendiri dari grup ini."},
+	"group":      {EN: "Quickly open or close the group chat. Usage: .group <open|close>", ID: "Buka atau tutup chat grup dengan cepat. Contoh: .group <open|close>"},
+	"ultah":      {EN: "View saved member birthdays in this group.", ID: "Lihat daftar ulang tahun anggota di grup ini."},
+	"setultah":   {EN: "Save your birthday in this group. Usage: .setultah DD-MM", ID: "Simpan tanggal ulang tahunmu di grup ini. Contoh: .setultah DD-MM"},
+	"delultah":   {EN: "Remove your saved birthday from this group.", ID: "Hapus tanggal ulang tahunmu dari grup ini."},
+	"tag":        {EN: "Mention all members in a custom tag group. Usage: .tag <name>", ID: "Sebut semua anggota dalam tag grup khusus. Contoh: .tag <nama>"},
+	"settag":     {EN: "Create or update a custom tag group. Usage: .settag <name> @user1 @user2", ID: "Buat atau perbarui tag grup khusus. Contoh: .settag <nama> @user1 @user2"},
+	"deltag":     {EN: "Delete a custom tag group. Usage: .deltag <name>", ID: "Hapus tag grup khusus. Contoh: .deltag <nama>"},
+	"listtag":    {EN: "List all custom tag groups in this group.", ID: "Lihat semua tag grup khusus yang tersimpan."},
+	"savekontak": {EN: "Export all group members as a .vcf vCard file.", ID: "Ekspor semua anggota grup menjadi file kontak .vcf."},
+
+	// Owner
+	"broadcast":  {EN: "Broadcast a message to all joined groups. Usage: .broadcast <text>", ID: "Kirim pesan siaran ke semua grup yang diikuti bot. Contoh: .broadcast <teks>"},
+	"react":      {EN: "React to a replied message with an emoji. Usage: .react 🔥", ID: "Beri reaksi emoji pada pesan yang dibalas. Contoh: .react 🔥"},
+	"block":      {EN: "Block a WhatsApp contact. Usage: .block @user|phone", ID: "Blokir kontak WhatsApp. Contoh: .block @user|nomor"},
+	"unblock":    {EN: "Unblock a WhatsApp contact. Usage: .unblock @user|phone", ID: "Buka blokir kontak WhatsApp. Contoh: .unblock @user|nomor"},
+	"listblock":  {EN: "List all blocked WhatsApp contacts.", ID: "Lihat daftar semua kontak WhatsApp yang diblokir."},
+	"kirim":      {EN: "Send a text message directly to a phone/JID. Usage: .kirim <phone> <msg>", ID: "Kirim pesan teks langsung ke nomor/JID tertentu. Contoh: .kirim <nomor> <pesan>"},
+	"public":     {EN: "Switch bot back to public mode (disable self-mode).", ID: "Kembalikan bot ke mode publik (matikan self-mode)."},
+	"addpoint":   {EN: "Add coins to a user's balance. Usage: .addpoint <phone|@user> <amt>", ID: "Tambahkan koin ke saldo pengguna. Contoh: .addpoint <nomor|@user> <jumlah>"},
+	"delpoint":   {EN: "Subtract coins from a user's balance. Usage: .delpoint <phone|@user> <amt>", ID: "Kurangi koin dari saldo pengguna. Contoh: .delpoint <nomor|@user> <jumlah>"},
+	"resetpoint": {EN: "Reset a user's coin balance to 0. Usage: .resetpoint <phone|@user>", ID: "Reset saldo koin pengguna menjadi 0. Contoh: .resetpoint <nomor|@user>"},
+	"addexp":     {EN: "Add XP to a user. Usage: .addexp <phone|@user> <xp>", ID: "Tambahkan XP ke pengguna. Contoh: .addexp <nomor|@user> <xp>"},
+	"delexp":     {EN: "Subtract XP from a user. Usage: .delexp <phone|@user> <xp>", ID: "Kurangi XP dari pengguna. Contoh: .delexp <nomor|@user> <xp>"},
 }
