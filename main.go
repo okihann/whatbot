@@ -229,6 +229,10 @@ func attachClientHandlers(client *whatsmeow.Client) {
 			if webHub != nil {
 				webHub.IngestHistorySync(client, v)
 			}
+		case *events.MediaRetry:
+			if webHub != nil {
+				webHub.HandleMediaRetry(client, v)
+			}
 		case *events.OfflineSyncCompleted:
 			if webHub != nil {
 				webHub.HandleOfflineSyncCompleted(client)

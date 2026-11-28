@@ -46,10 +46,13 @@ type StoredMessage struct {
 	MediaMime           string `json:"mediaMime"`
 	MediaPath           string `json:"mediaPath"`
 	AudioPath           string `json:"audioPath"`
+	ThumbPath           string `json:"thumbPath,omitempty"`
+	HasMedia            bool   `json:"hasMedia"`
 	Timestamp           int64  `json:"timestamp"`
 	ChatName            string `json:"-"`
 	ChatIsGroup         bool   `json:"-"`
 	SkipUnreadIncrement bool   `json:"-"`
+	MediaProto          []byte `json:"-"`
 }
 
 // StoredContact represents a synced WhatsApp contact stored for the Web UI.
@@ -74,6 +77,18 @@ func IsIgnoredWebChatJID(jid string) bool {
 	return strings.HasSuffix(j, "@newsletter") ||
 		strings.HasSuffix(j, "@broadcast") ||
 		j == "status@broadcast"
+}
+
+// NormalizeUnixSeconds converts millisecond Unix timestamps (> 1e12) into
+// seconds so mixed-unit history timestamps never break ordering or previews.
+func NormalizeUnixSeconds(ts int64) int64 {
+	for ts > 1_000_000_000_000 {
+		ts /= 1000
+	}
+	if ts < 0 {
+		return 0
+	}
+	return ts
 }
 
 type writeOp struct {
@@ -134,6 +149,8 @@ func OpenChatStore(dbPath, mediaRoot string) (*ChatStore, error) {
 		media_mime   TEXT NOT NULL DEFAULT '',
 		media_path   TEXT NOT NULL DEFAULT '',
 		audio_path   TEXT NOT NULL DEFAULT '',
+		thumb_path   TEXT NOT NULL DEFAULT '',
+		media_proto  BLOB,
 		timestamp    INTEGER NOT NULL DEFAULT 0,
 		PRIMARY KEY (account_id, msg_id)
 	);
@@ -160,6 +177,13 @@ func OpenChatStore(dbPath, mediaRoot string) (*ChatStore, error) {
 		return nil, fmt.Errorf("init webchat schema: %w", err)
 	}
 
+	// Idempotent migrations for existing db/webchat.db files created by older versions.
+	_, _ = conn.Exec(`ALTER TABLE messages ADD COLUMN thumb_path TEXT NOT NULL DEFAULT ''`)
+	_, _ = conn.Exec(`ALTER TABLE messages ADD COLUMN media_proto BLOB`)
+	// Repair any legacy millisecond timestamps that would pin old chats above new ones.
+	_, _ = conn.Exec(`UPDATE messages SET timestamp = timestamp / 1000 WHERE timestamp > 1000000000000`)
+	_, _ = conn.Exec(`UPDATE chats SET last_timestamp = last_timestamp / 1000 WHERE last_timestamp > 1000000000000`)
+
 	cs := &ChatStore{
 		db:        conn,
 		mediaRoot: mediaRoot,
@@ -168,6 +192,7 @@ func OpenChatStore(dbPath, mediaRoot string) (*ChatStore, error) {
 	}
 	cs.wg.Add(1)
 	go cs.writeLoop()
+	cs.RepairChatSummaries("")
 	return cs, nil
 }
 
@@ -378,6 +403,7 @@ func (cs *ChatStore) RecordMessage(m StoredMessage) {
 	if m.AccountID == "" || m.MsgID == "" || m.ChatJID == "" || IsIgnoredWebChatJID(m.ChatJID) {
 		return
 	}
+	m.Timestamp = NormalizeUnixSeconds(m.Timestamp)
 	if m.Timestamp == 0 {
 		m.Timestamp = time.Now().Unix()
 	}
@@ -400,8 +426,8 @@ func (cs *ChatStore) RecordMessage(m StoredMessage) {
 			INSERT INTO messages (
 				account_id, msg_id, chat_jid, sender_jid, sender_name, is_from_me,
 				msg_type, body, caption, is_view_once, is_deleted,
-				media_mime, media_path, audio_path, timestamp
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				media_mime, media_path, audio_path, thumb_path, media_proto, timestamp
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(account_id, msg_id) DO UPDATE SET
 				chat_jid = CASE WHEN messages.chat_jid LIKE '%@lid' AND excluded.chat_jid NOT LIKE '%@lid' THEN excluded.chat_jid ELSE messages.chat_jid END,
 				body = CASE WHEN excluded.body != '' THEN excluded.body ELSE messages.body END,
@@ -409,11 +435,13 @@ func (cs *ChatStore) RecordMessage(m StoredMessage) {
 				media_mime = CASE WHEN excluded.media_mime != '' THEN excluded.media_mime ELSE messages.media_mime END,
 				media_path = CASE WHEN excluded.media_path != '' THEN excluded.media_path ELSE messages.media_path END,
 				audio_path = CASE WHEN excluded.audio_path != '' THEN excluded.audio_path ELSE messages.audio_path END,
+				thumb_path = CASE WHEN excluded.thumb_path != '' THEN excluded.thumb_path ELSE messages.thumb_path END,
+				media_proto = CASE WHEN excluded.media_proto IS NOT NULL AND LENGTH(excluded.media_proto) > 0 THEN excluded.media_proto ELSE messages.media_proto END,
 				is_view_once = MAX(messages.is_view_once, excluded.is_view_once)
 		`,
 			m.AccountID, m.MsgID, m.ChatJID, m.SenderJID, m.SenderName, boolToInt(m.IsFromMe),
 			m.MsgType, m.Body, m.Caption, boolToInt(m.IsViewOnce), boolToInt(m.IsDeleted),
-			m.MediaMime, m.MediaPath, m.AudioPath, m.Timestamp,
+			m.MediaMime, m.MediaPath, m.AudioPath, m.ThumbPath, m.MediaProto, m.Timestamp,
 		)
 		if err != nil {
 			return err
@@ -425,7 +453,11 @@ func (cs *ChatStore) RecordMessage(m StoredMessage) {
 			ON CONFLICT(account_id, chat_jid) DO UPDATE SET
 				name = CASE WHEN excluded.name != '' AND (chats.name = '' OR chats.name = chats.chat_jid OR chats.name = SUBSTR(chats.chat_jid, 1, INSTR(chats.chat_jid, '@') - 1) OR excluded.is_group = 1) THEN excluded.name ELSE chats.name END,
 				is_group = MAX(chats.is_group, excluded.is_group),
-				last_message = CASE WHEN excluded.last_timestamp >= chats.last_timestamp THEN excluded.last_message ELSE chats.last_message END,
+				last_message = CASE
+					WHEN excluded.last_timestamp >= chats.last_timestamp THEN excluded.last_message
+					WHEN chats.last_message = '' THEN excluded.last_message
+					ELSE chats.last_message
+				END,
 				last_timestamp = MAX(chats.last_timestamp, excluded.last_timestamp),
 				unread_count = chats.unread_count + excluded.unread_count,
 				has_view_once = MAX(chats.has_view_once, excluded.has_view_once)
@@ -443,6 +475,7 @@ func (cs *ChatStore) UpsertChat(c StoredChat) {
 	if c.AccountID == "" || c.ChatJID == "" || IsIgnoredWebChatJID(c.ChatJID) {
 		return
 	}
+	c.LastTimestamp = NormalizeUnixSeconds(c.LastTimestamp)
 	name := strings.TrimSpace(c.Name)
 	if name == "" {
 		name = strings.Split(c.ChatJID, "@")[0]
@@ -461,7 +494,11 @@ func (cs *ChatStore) UpsertChat(c StoredChat) {
 					ELSE chats.name
 				END,
 				is_group = MAX(chats.is_group, excluded.is_group),
-				last_message = CASE WHEN excluded.last_message != '' AND excluded.last_timestamp >= chats.last_timestamp THEN excluded.last_message ELSE chats.last_message END,
+				last_message = CASE
+					WHEN excluded.last_message != '' AND excluded.last_timestamp >= chats.last_timestamp THEN excluded.last_message
+					WHEN chats.last_message = '' AND excluded.last_message != '' THEN excluded.last_message
+					ELSE chats.last_message
+				END,
 				last_timestamp = MAX(chats.last_timestamp, excluded.last_timestamp),
 				unread_count = MAX(chats.unread_count, excluded.unread_count)
 		`,
@@ -598,14 +635,17 @@ func (cs *ChatStore) UpdateMessageBody(accountID, msgID, newBody, newCaption str
 	})
 }
 
-// ListLIDChatJIDs returns all @lid chat JIDs stored for an account so SyncAccount
-// can merge them into their canonical @s.whatsapp.net phone-number JIDs.
+// ListLIDChatJIDs returns all @lid chat JIDs stored in either chats or messages
+// for an account so SyncAccount can merge them into canonical @s.whatsapp.net JIDs.
 func (cs *ChatStore) ListLIDChatJIDs(accountID string) ([]string, error) {
 	cs.Flush()
 	rows, err := cs.db.Query(`
 		SELECT chat_jid FROM chats
 		WHERE account_id = ? AND LOWER(chat_jid) LIKE '%@lid'
-	`, accountID)
+		UNION
+		SELECT DISTINCT chat_jid FROM messages
+		WHERE account_id = ? AND LOWER(chat_jid) LIKE '%@lid'
+	`, accountID, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -619,6 +659,79 @@ func (cs *ChatStore) ListLIDChatJIDs(accountID string) ([]string, error) {
 		out = append(out, jid)
 	}
 	return out, rows.Err()
+}
+
+// RepairChatSummaries fixes legacy millisecond timestamps, creates missing chat
+// rows for any orphaned messages, and backfills blank last_message/last_timestamp
+// values from the newest stored message in each chat. Pass accountID="" to repair all accounts.
+func (cs *ChatStore) RepairChatSummaries(accountID string) {
+	if cs == nil {
+		return
+	}
+	cs.enqueue(func(tx *sql.Tx) error {
+		if accountID == "" {
+			_, _ = tx.Exec(`UPDATE messages SET timestamp = timestamp / 1000 WHERE timestamp > 1000000000000`)
+			_, _ = tx.Exec(`UPDATE chats SET last_timestamp = last_timestamp / 1000 WHERE last_timestamp > 1000000000000`)
+		} else {
+			_, _ = tx.Exec(`UPDATE messages SET timestamp = timestamp / 1000 WHERE account_id = ? AND timestamp > 1000000000000`, accountID)
+			_, _ = tx.Exec(`UPDATE chats SET last_timestamp = last_timestamp / 1000 WHERE account_id = ? AND last_timestamp > 1000000000000`, accountID)
+		}
+
+		// Ensure every chat_jid that has stored messages also has a row in chats.
+		orphanSQL := `
+			INSERT OR IGNORE INTO chats (account_id, chat_jid, name, is_group, last_message, last_timestamp, unread_count, has_view_once)
+			SELECT m.account_id,
+			       m.chat_jid,
+			       SUBSTR(m.chat_jid, 1, CASE WHEN INSTR(m.chat_jid, '@') > 0 THEN INSTR(m.chat_jid, '@') - 1 ELSE LENGTH(m.chat_jid) END),
+			       CASE WHEN LOWER(m.chat_jid) LIKE '%@g.us' THEN 1 ELSE 0 END,
+			       '',
+			       MAX(m.timestamp),
+			       0,
+			       MAX(m.is_view_once)
+			FROM messages m
+			WHERE LOWER(m.chat_jid) NOT LIKE '%@newsletter'
+			  AND LOWER(m.chat_jid) NOT LIKE '%@broadcast'
+		`
+		if accountID != "" {
+			_, _ = tx.Exec(orphanSQL+` AND m.account_id = ? GROUP BY m.account_id, m.chat_jid`, accountID)
+		} else {
+			_, _ = tx.Exec(orphanSQL + ` GROUP BY m.account_id, m.chat_jid`)
+		}
+
+		// Backfill last_timestamp, last_message (when empty or older), and has_view_once from newest message.
+		whereAcct := ""
+		var args []any
+		if accountID != "" {
+			whereAcct = " WHERE account_id = ?"
+			args = append(args, accountID)
+		}
+		_, _ = tx.Exec(`
+			UPDATE chats
+			SET last_timestamp = MAX(
+				last_timestamp,
+				COALESCE((SELECT MAX(m.timestamp) FROM messages m WHERE m.account_id = chats.account_id AND m.chat_jid = chats.chat_jid), 0)
+			),
+			has_view_once = MAX(
+				has_view_once,
+				COALESCE((SELECT MAX(m.is_view_once) FROM messages m WHERE m.account_id = chats.account_id AND m.chat_jid = chats.chat_jid), 0)
+			),
+			last_message = CASE
+				WHEN last_message = '' THEN COALESCE((
+					SELECT CASE
+						WHEN m.body != '' THEN m.body
+						WHEN m.caption != '' THEN m.caption
+						ELSE '[' || m.msg_type || ']'
+					END
+					FROM messages m
+					WHERE m.account_id = chats.account_id AND m.chat_jid = chats.chat_jid
+					ORDER BY m.timestamp DESC
+					LIMIT 1
+				), '')
+				ELSE last_message
+			END
+		`+whereAcct, args...)
+		return nil
+	})
 }
 
 // MergeChatJID moves all messages from an alias/LID chat JID (fromJID) into its
@@ -755,12 +868,14 @@ func (cs *ChatStore) ListChats(accountID, search, filter string) ([]StoredChat, 
 func (cs *ChatStore) ListMessages(accountID, chatJID string, limit int) ([]StoredMessage, error) {
 	cs.Flush()
 	if limit <= 0 || limit > 500 {
-		limit = 100
+		limit = 200
 	}
 	rows, err := cs.db.Query(`
 		SELECT account_id, msg_id, chat_jid, sender_jid, sender_name, is_from_me,
 		       msg_type, body, caption, is_view_once, is_deleted,
-		       media_mime, media_path, audio_path, timestamp
+		       media_mime, media_path, audio_path, thumb_path,
+		       CASE WHEN media_path != '' OR thumb_path != '' OR (media_proto IS NOT NULL AND LENGTH(media_proto) > 0) THEN 1 ELSE 0 END,
+		       timestamp
 		FROM messages
 		WHERE account_id = ? AND chat_jid = ?
 		ORDER BY timestamp DESC
@@ -774,17 +889,18 @@ func (cs *ChatStore) ListMessages(accountID, chatJID string, limit int) ([]Store
 	var rev []StoredMessage
 	for rows.Next() {
 		var m StoredMessage
-		var fromMe, vo, del int
+		var fromMe, vo, del, hasMedia int
 		if err := rows.Scan(
 			&m.AccountID, &m.MsgID, &m.ChatJID, &m.SenderJID, &m.SenderName, &fromMe,
 			&m.MsgType, &m.Body, &m.Caption, &vo, &del,
-			&m.MediaMime, &m.MediaPath, &m.AudioPath, &m.Timestamp,
+			&m.MediaMime, &m.MediaPath, &m.AudioPath, &m.ThumbPath, &hasMedia, &m.Timestamp,
 		); err != nil {
 			return nil, err
 		}
 		m.IsFromMe = fromMe == 1
 		m.IsViewOnce = vo == 1
 		m.IsDeleted = del == 1
+		m.HasMedia = hasMedia == 1
 		rev = append(rev, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -807,7 +923,7 @@ func (cs *ChatStore) GetOldestMessage(accountID, chatJID string) (*StoredMessage
 	err := cs.db.QueryRow(`
 		SELECT account_id, msg_id, chat_jid, sender_jid, sender_name, is_from_me,
 		       msg_type, body, caption, is_view_once, is_deleted,
-		       media_mime, media_path, audio_path, timestamp
+		       media_mime, media_path, audio_path, thumb_path, timestamp
 		FROM messages
 		WHERE account_id = ? AND chat_jid = ?
 		ORDER BY timestamp ASC
@@ -815,7 +931,7 @@ func (cs *ChatStore) GetOldestMessage(accountID, chatJID string) (*StoredMessage
 	`, accountID, chatJID).Scan(
 		&m.AccountID, &m.MsgID, &m.ChatJID, &m.SenderJID, &m.SenderName, &fromMe,
 		&m.MsgType, &m.Body, &m.Caption, &vo, &del,
-		&m.MediaMime, &m.MediaPath, &m.AudioPath, &m.Timestamp,
+		&m.MediaMime, &m.MediaPath, &m.AudioPath, &m.ThumbPath, &m.Timestamp,
 	)
 	if err != nil {
 		return nil, err
@@ -823,6 +939,7 @@ func (cs *ChatStore) GetOldestMessage(accountID, chatJID string) (*StoredMessage
 	m.IsFromMe = fromMe == 1
 	m.IsViewOnce = vo == 1
 	m.IsDeleted = del == 1
+	m.HasMedia = m.MediaPath != "" || m.ThumbPath != ""
 	return &m, nil
 }
 
@@ -833,13 +950,13 @@ func (cs *ChatStore) GetMessage(accountID, msgID string) (*StoredMessage, error)
 	err := cs.db.QueryRow(`
 		SELECT account_id, msg_id, chat_jid, sender_jid, sender_name, is_from_me,
 		       msg_type, body, caption, is_view_once, is_deleted,
-		       media_mime, media_path, audio_path, timestamp
+		       media_mime, media_path, audio_path, thumb_path, media_proto, timestamp
 		FROM messages
 		WHERE account_id = ? AND msg_id = ?
 	`, accountID, msgID).Scan(
 		&m.AccountID, &m.MsgID, &m.ChatJID, &m.SenderJID, &m.SenderName, &fromMe,
 		&m.MsgType, &m.Body, &m.Caption, &vo, &del,
-		&m.MediaMime, &m.MediaPath, &m.AudioPath, &m.Timestamp,
+		&m.MediaMime, &m.MediaPath, &m.AudioPath, &m.ThumbPath, &m.MediaProto, &m.Timestamp,
 	)
 	if err != nil {
 		return nil, err
@@ -847,5 +964,6 @@ func (cs *ChatStore) GetMessage(accountID, msgID string) (*StoredMessage, error)
 	m.IsFromMe = fromMe == 1
 	m.IsViewOnce = vo == 1
 	m.IsDeleted = del == 1
+	m.HasMedia = m.MediaPath != "" || m.ThumbPath != "" || len(m.MediaProto) > 0
 	return &m, nil
 }

@@ -690,7 +690,7 @@
       const qs = new URLSearchParams({
         account: state.account,
         chat: state.activeChat.chatJid,
-        limit: '150',
+        limit: '300',
       });
       const data = await apiFetch(`/api/wa/messages?${qs.toString()}`);
       state.messages = data.messages || [];
@@ -703,42 +703,44 @@
   function renderMessageMedia(m) {
     if (m.msgType === 'text') return '';
     const src = mediaUrl(m.accountId, m.msgId);
-    if (!m.mediaPath) {
+    const canFetch = !!(m.mediaPath || m.hasMedia || m.thumbPath);
+    if (!canFetch) {
       const ageSec = m.timestamp ? (Math.floor(Date.now() / 1000) - m.timestamp) : 0;
       if (ageSec > 90) {
-        return `<div class="media-pending">📎 ${escapeHtml(m.msgType)} (synced from history)</div>`;
+        return `<div class="media-pending">📎 ${escapeHtml(m.msgType)} (old history media — click ⬆ Older or re-pair to fetch)</div>`;
       }
       return `<div class="media-pending">⏳ Capturing ${escapeHtml(m.msgType)} media...</div>`;
     }
+    const imgErr = `this.closest('.media-box').innerHTML='<div class=&quot;media-pending&quot;>📎 Media unavailable or expired on WhatsApp</div>'`;
     switch (m.msgType) {
       case 'image':
         return `
           <div class="media-box">
-            <img src="${src}" alt="image" data-lightbox="${src}" loading="lazy">
+            <img src="${src}" alt="image" data-lightbox="${src}" loading="lazy" onerror="${imgErr}">
             <div class="media-actions"><a href="${src}" download>⬇ Save image</a></div>
           </div>`;
       case 'video':
         return `
           <div class="media-box">
-            <video src="${src}" controls playsinline preload="metadata"></video>
+            <video src="${src}" controls playsinline preload="none" onerror="${imgErr}"></video>
             <div class="media-actions"><a href="${src}" download>⬇ Save video</a></div>
           </div>`;
       case 'audio':
         return `
           <div class="media-box">
-            <audio src="${src}" controls preload="metadata"></audio>
+            <audio src="${src}" controls preload="none"></audio>
           </div>`;
       case 'sticker':
         return `
           <div class="media-box">
-            <img class="sticker" src="${src}" alt="sticker" loading="lazy">
+            <img class="sticker" src="${src}" alt="sticker" loading="lazy" onerror="${imgErr}">
           </div>`;
       case 'sound_sticker': {
-        const audioSrc = m.audioPath ? mediaUrl(m.accountId, m.msgId, 'audio') : '';
+        const audioSrc = (m.audioPath || m.hasMedia) ? mediaUrl(m.accountId, m.msgId, 'audio') : '';
         return `
           <div class="media-box">
-            <img class="sticker" src="${src}" alt="sound sticker" loading="lazy">
-            ${audioSrc ? `<audio src="${audioSrc}" controls preload="metadata"></audio>` : '<div class="media-pending">🔊 Loading sticker audio...</div>'}
+            <img class="sticker" src="${src}" alt="sound sticker" loading="lazy" onerror="${imgErr}">
+            ${audioSrc ? `<audio src="${audioSrc}" controls preload="none"></audio>` : '<div class="media-pending">🔊 Loading sticker audio...</div>'}
           </div>`;
       }
       case 'document':

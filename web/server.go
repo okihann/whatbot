@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -485,15 +486,12 @@ func (h *Hub) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wantAudio := r.URL.Query().Get("track") == "audio"
 	targetRel := msg.MediaPath
 	contentType := msg.MediaMime
-	if r.URL.Query().Get("track") == "audio" {
+	if wantAudio {
 		targetRel = msg.AudioPath
 		contentType = "audio/ogg; codecs=opus"
-	}
-	if targetRel == "" {
-		http.NotFound(w, r)
-		return
 	}
 
 	rootAbs, err := filepath.Abs(h.store.MediaRoot())
@@ -501,15 +499,52 @@ func (h *Hub) handleMedia(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	fullPath, err := filepath.Abs(filepath.Join(rootAbs, targetRel))
-	if err != nil || !strings.HasPrefix(fullPath, rootAbs+string(filepath.Separator)) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+
+	fileReady := false
+	var fullPath string
+	if targetRel != "" {
+		if candidate, pErr := filepath.Abs(filepath.Join(rootAbs, targetRel)); pErr == nil &&
+			strings.HasPrefix(candidate, rootAbs+string(filepath.Separator)) {
+			if st, sErr := os.Stat(candidate); sErr == nil && !st.IsDir() && st.Size() > 0 {
+				fullPath = candidate
+				fileReady = true
+			}
+		}
+	}
+
+	// On-demand download for historical or previously uncached media.
+	isThumbFallback := false
+	if !fileReady {
+		var cli *whatsmeow.Client
+		if h.accounts != nil {
+			cli, _ = h.accounts.GetClient(acct)
+		}
+		if dlRel, dlMime, isThumb, dlErr := h.DownloadMessageMediaOnDemand(r.Context(), cli, acct, msg, wantAudio); dlErr == nil && dlRel != "" {
+			if candidate, pErr := filepath.Abs(filepath.Join(rootAbs, dlRel)); pErr == nil &&
+				strings.HasPrefix(candidate, rootAbs+string(filepath.Separator)) {
+				if st, sErr := os.Stat(candidate); sErr == nil && !st.IsDir() && st.Size() > 0 {
+					fullPath = candidate
+					if dlMime != "" {
+						contentType = dlMime
+					}
+					isThumbFallback = isThumb
+					fileReady = true
+				}
+			}
+		}
+	}
+
+	if !fileReady {
+		http.NotFound(w, r)
 		return
 	}
 
 	// Prevent stored XSS from malicious WhatsApp attachments (e.g. .html, .svg, .js):
 	// only allow safe non-scriptable media inline; force everything else to download.
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	if isThumbFallback {
+		w.Header().Set("X-Media-Fallback", "thumbnail")
+	}
 	ext := strings.ToLower(filepath.Ext(fullPath))
 	dangerousExt := ext == ".html" || ext == ".htm" || ext == ".xhtml" || ext == ".svg" || ext == ".xml" || ext == ".js" || ext == ".mjs"
 	if !dangerousExt && isSafeInlineMediaMIME(contentType) {
@@ -518,7 +553,11 @@ func (h *Hub) handleMedia(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", utils.SanitizeFilename(filepath.Base(fullPath))))
 	}
-	w.Header().Set("Cache-Control", "private, max-age=86400")
+	if isThumbFallback {
+		w.Header().Set("Cache-Control", "private, max-age=300")
+	} else {
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+	}
 	http.ServeFile(w, r, fullPath)
 }
 

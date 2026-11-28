@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime"
 	"os"
@@ -18,8 +19,10 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waMmsRetry"
 	waTypes "go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 )
 
 const maxWebAutoDownloadBytes = 15 * 1024 * 1024 // 15 MB auto-capture limit for web UI
@@ -71,6 +74,10 @@ type Hub struct {
 
 	groupMu    sync.Mutex
 	groupNames map[string]groupNameEntry
+
+	mediaFetchMu      sync.Mutex
+	mediaInFlight     map[string]chan struct{}
+	mediaRetryWaiters map[string]chan *events.MediaRetry
 }
 
 type groupNameEntry struct {
@@ -80,16 +87,18 @@ type groupNameEntry struct {
 
 func NewHub(chatStore *db.ChatStore, sessionDB *sql.DB, accounts AccountManager) *Hub {
 	return &Hub{
-		store:       chatStore,
-		sessionDB:   sessionDB,
-		accounts:    accounts,
-		startedAt:   time.Now(),
-		auth:        newWebAuth(),
-		subscribers: make(map[chan SSEEvent]struct{}),
-		qrStatus:    "idle",
-		avatarMiss:  make(map[string]time.Time),
-		mergedLIDs:  make(map[string]string),
-		groupNames:  make(map[string]groupNameEntry),
+		store:             chatStore,
+		sessionDB:         sessionDB,
+		accounts:          accounts,
+		startedAt:         time.Now(),
+		auth:              newWebAuth(),
+		subscribers:       make(map[chan SSEEvent]struct{}),
+		qrStatus:          "idle",
+		avatarMiss:        make(map[string]time.Time),
+		mergedLIDs:        make(map[string]string),
+		groupNames:        make(map[string]groupNameEntry),
+		mediaInFlight:     make(map[string]chan struct{}),
+		mediaRetryWaiters: make(map[string]chan *events.MediaRetry),
 	}
 }
 
@@ -364,6 +373,11 @@ func resolveCanonicalChatJID(
 	extraLIDMap map[string]string,
 ) waTypes.JID {
 	clean := chat.ToNonAD()
+	if clean.Server == waTypes.HostedLIDServer {
+		clean.Server = waTypes.HiddenUserServer
+	} else if clean.Server == waTypes.HostedServer {
+		clean.Server = waTypes.DefaultUserServer
+	}
 	if isGroup || clean.Server != waTypes.HiddenUserServer || clean.User == "" {
 		return clean
 	}
@@ -493,23 +507,32 @@ func (h *Hub) IngestMessage(client *whatsmeow.Client, msg *events.Message) {
 		return
 	}
 
+	rawChatJID := msg.Info.Chat
+	if msg.Info.IsFromMe && !msg.Info.IsGroup && msg.Info.DeviceSentMeta != nil && strings.TrimSpace(msg.Info.DeviceSentMeta.DestinationJID) != "" {
+		if rawChatJID.User == acct || rawChatJID.IsEmpty() {
+			if dest, err := waTypes.ParseJID(strings.TrimSpace(msg.Info.DeviceSentMeta.DestinationJID)); err == nil && !dest.IsEmpty() {
+				rawChatJID = dest
+			}
+		}
+	}
+
 	// Skip WhatsApp Channels (@newsletter) and Status/Broadcast lists (@broadcast).
-	if msg.Info.Chat.Server == waTypes.BroadcastServer ||
-		msg.Info.Chat.Server == waTypes.NewsletterServer ||
-		db.IsIgnoredWebChatJID(msg.Info.Chat.String()) {
+	if rawChatJID.Server == waTypes.BroadcastServer ||
+		rawChatJID.Server == waTypes.NewsletterServer ||
+		db.IsIgnoredWebChatJID(rawChatJID.String()) {
 		return
 	}
 
 	canonicalChat := resolveCanonicalChatJID(
 		client,
-		msg.Info.Chat,
+		rawChatJID,
 		msg.Info.SenderAlt,
 		msg.Info.RecipientAlt,
 		msg.Info.IsGroup,
 		msg.Info.IsFromMe,
 		nil,
 	)
-	rawChatStr := msg.Info.Chat.ToNonAD().String()
+	rawChatStr := rawChatJID.ToNonAD().String()
 	chatJIDStr := canonicalChat.String()
 	if rawChatStr != chatJIDStr {
 		h.maybeMergeLID(acct, rawChatStr, chatJIDStr)
@@ -588,9 +611,16 @@ func (h *Hub) IngestMessage(client *whatsmeow.Client, msg *events.Message) {
 		}
 	}
 
-	ts := msg.Info.Timestamp.Unix()
+	ts := db.NormalizeUnixSeconds(msg.Info.Timestamp.Unix())
 	if ts <= 0 {
 		ts = time.Now().Unix()
+	}
+
+	var mediaProto []byte
+	var thumbPath string
+	if msgType != "text" {
+		mediaProto = marshalMediaProto(core)
+		thumbPath = h.saveMediaThumb(acct, msg.Info.ID, core)
 	}
 
 	stored := db.StoredMessage{
@@ -605,6 +635,9 @@ func (h *Hub) IngestMessage(client *whatsmeow.Client, msg *events.Message) {
 		Caption:     caption,
 		IsViewOnce:  isVO,
 		MediaMime:   mimeType,
+		ThumbPath:   thumbPath,
+		HasMedia:    thumbPath != "" || len(mediaProto) > 0,
+		MediaProto:  mediaProto,
 		Timestamp:   ts,
 		ChatName:    h.resolveWebChatName(client, msg.Info, canonicalChat),
 		ChatIsGroup: msg.Info.IsGroup,
@@ -668,6 +701,285 @@ func (h *Hub) captureMediaForWeb(client *whatsmeow.Client, acct, chatJID, msgID 
 		"audioPath": audioRel,
 		"mediaMime": mimeType,
 	})
+}
+
+func extractMediaThumbnail(core *waE2E.Message) []byte {
+	if core == nil {
+		return nil
+	}
+	switch {
+	case core.ImageMessage != nil && len(core.ImageMessage.GetJPEGThumbnail()) > 0:
+		return core.ImageMessage.GetJPEGThumbnail()
+	case core.InstantImageMessage != nil && len(core.InstantImageMessage.GetJPEGThumbnail()) > 0:
+		return core.InstantImageMessage.GetJPEGThumbnail()
+	case core.VideoMessage != nil && len(core.VideoMessage.GetJPEGThumbnail()) > 0:
+		return core.VideoMessage.GetJPEGThumbnail()
+	case core.PtvMessage != nil && len(core.PtvMessage.GetJPEGThumbnail()) > 0:
+		return core.PtvMessage.GetJPEGThumbnail()
+	case core.DocumentMessage != nil && len(core.DocumentMessage.GetJPEGThumbnail()) > 0:
+		return core.DocumentMessage.GetJPEGThumbnail()
+	default:
+		return nil
+	}
+}
+
+func extractMediaKey(core *waE2E.Message) []byte {
+	if core == nil {
+		return nil
+	}
+	switch {
+	case core.ImageMessage != nil:
+		return core.ImageMessage.GetMediaKey()
+	case core.InstantImageMessage != nil:
+		return core.InstantImageMessage.GetMediaKey()
+	case core.VideoMessage != nil:
+		return core.VideoMessage.GetMediaKey()
+	case core.PtvMessage != nil:
+		return core.PtvMessage.GetMediaKey()
+	case core.AudioMessage != nil:
+		return core.AudioMessage.GetMediaKey()
+	case core.StickerMessage != nil:
+		return core.StickerMessage.GetMediaKey()
+	case core.DocumentMessage != nil:
+		return core.DocumentMessage.GetMediaKey()
+	default:
+		return nil
+	}
+}
+
+func updateMediaDirectPath(core *waE2E.Message, directPath string) {
+	if core == nil || directPath == "" {
+		return
+	}
+	switch {
+	case core.ImageMessage != nil:
+		core.ImageMessage.DirectPath = proto.String(directPath)
+		core.ImageMessage.URL = nil
+	case core.InstantImageMessage != nil:
+		core.InstantImageMessage.DirectPath = proto.String(directPath)
+		core.InstantImageMessage.URL = nil
+	case core.VideoMessage != nil:
+		core.VideoMessage.DirectPath = proto.String(directPath)
+		core.VideoMessage.URL = nil
+	case core.PtvMessage != nil:
+		core.PtvMessage.DirectPath = proto.String(directPath)
+		core.PtvMessage.URL = nil
+	case core.AudioMessage != nil:
+		core.AudioMessage.DirectPath = proto.String(directPath)
+		core.AudioMessage.URL = nil
+	case core.StickerMessage != nil:
+		core.StickerMessage.DirectPath = proto.String(directPath)
+		core.StickerMessage.URL = nil
+	case core.DocumentMessage != nil:
+		core.DocumentMessage.DirectPath = proto.String(directPath)
+		core.DocumentMessage.URL = nil
+	}
+}
+
+func marshalMediaProto(core *waE2E.Message) []byte {
+	if core == nil || !utils.HasDownloadableMedia(core) {
+		return nil
+	}
+	b, err := proto.Marshal(core)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+func (h *Hub) saveMediaThumb(acct, msgID string, core *waE2E.Message) string {
+	if h == nil || h.store == nil || acct == "" || msgID == "" {
+		return ""
+	}
+	thumb := extractMediaThumbnail(core)
+	if len(thumb) == 0 {
+		return ""
+	}
+	rel, err := h.store.SaveMediaFile(acct, msgID, "_thumb.jpg", thumb)
+	if err != nil {
+		return ""
+	}
+	return rel
+}
+
+// HandleMediaRetry wakes any pending on-demand download waiting for WhatsApp's
+// phone re-upload response (*events.MediaRetry) for expired historical media.
+func (h *Hub) HandleMediaRetry(client *whatsmeow.Client, evt *events.MediaRetry) {
+	if h == nil || evt == nil || evt.MessageID == "" {
+		return
+	}
+	acct := accountKey(client)
+	key := acct + "|" + evt.MessageID
+	h.mediaFetchMu.Lock()
+	ch, ok := h.mediaRetryWaiters[key]
+	if ok {
+		delete(h.mediaRetryWaiters, key)
+	}
+	h.mediaFetchMu.Unlock()
+	if ok && ch != nil {
+		select {
+		case ch <- evt:
+		default:
+		}
+	}
+}
+
+// DownloadMessageMediaOnDemand lazily downloads & decrypts an old/uncached media
+// message from WhatsApp CDN when opened in the Web UI. If CDN returns 404/410,
+// it requests a re-upload from the user's phone via SendMediaRetryReceipt, and
+// falls back cleanly to the saved JPEG thumbnail if the phone cannot re-upload.
+func (h *Hub) DownloadMessageMediaOnDemand(
+	ctx context.Context,
+	client *whatsmeow.Client,
+	acct string,
+	msg *db.StoredMessage,
+	wantAudio bool,
+) (relPath, mimeType string, isThumb bool, err error) {
+	if h == nil || h.store == nil || msg == nil {
+		return "", "", false, fmt.Errorf("missing message")
+	}
+
+	// Singleflight dedup per (account, msgID) so concurrent requests share one download.
+	flightKey := acct + "|" + msg.MsgID
+	h.mediaFetchMu.Lock()
+	if waitCh, busy := h.mediaInFlight[flightKey]; busy {
+		h.mediaFetchMu.Unlock()
+		select {
+		case <-waitCh:
+		case <-ctx.Done():
+			return "", "", false, ctx.Err()
+		}
+		refreshed, rErr := h.store.GetMessage(acct, msg.MsgID)
+		if rErr == nil && refreshed != nil {
+			if wantAudio && refreshed.AudioPath != "" {
+				return refreshed.AudioPath, "audio/ogg; codecs=opus", false, nil
+			}
+			if !wantAudio && refreshed.MediaPath != "" {
+				return refreshed.MediaPath, refreshed.MediaMime, false, nil
+			}
+			if !wantAudio && refreshed.ThumbPath != "" {
+				return refreshed.ThumbPath, "image/jpeg", true, nil
+			}
+		}
+		return "", "", false, fmt.Errorf("media unavailable")
+	}
+	doneCh := make(chan struct{})
+	h.mediaInFlight[flightKey] = doneCh
+	h.mediaFetchMu.Unlock()
+
+	defer func() {
+		h.mediaFetchMu.Lock()
+		delete(h.mediaInFlight, flightKey)
+		h.mediaFetchMu.Unlock()
+		close(doneCh)
+	}()
+
+	if len(msg.MediaProto) == 0 || client == nil || !client.IsConnected() {
+		if !wantAudio && msg.ThumbPath != "" {
+			return msg.ThumbPath, "image/jpeg", true, nil
+		}
+		return "", "", false, fmt.Errorf("media not available for on-demand download")
+	}
+
+	var core waE2E.Message
+	if uErr := proto.Unmarshal(msg.MediaProto, &core); uErr != nil {
+		if !wantAudio && msg.ThumbPath != "" {
+			return msg.ThumbPath, "image/jpeg", true, nil
+		}
+		return "", "", false, fmt.Errorf("decode media proto: %w", uErr)
+	}
+
+	dlCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+
+	data, _, _, dlErr := utils.DownloadMedia(dlCtx, client, &core)
+	if dlErr != nil && (errors.Is(dlErr, whatsmeow.ErrMediaDownloadFailedWith404) || errors.Is(dlErr, whatsmeow.ErrMediaDownloadFailedWith410)) {
+		// Expired CDN URL (common for older history messages): ask phone to re-upload!
+		if mediaKey := extractMediaKey(&core); len(mediaKey) > 0 {
+			if parsedChat, pErr := waTypes.ParseJID(msg.ChatJID); pErr == nil {
+				parsedSender, _ := waTypes.ParseJID(msg.SenderJID)
+				if parsedSender.IsEmpty() {
+					parsedSender = parsedChat
+				}
+				retryCh := make(chan *events.MediaRetry, 1)
+				h.mediaFetchMu.Lock()
+				h.mediaRetryWaiters[flightKey] = retryCh
+				h.mediaFetchMu.Unlock()
+
+				msgInfo := &waTypes.MessageInfo{
+					MessageSource: waTypes.MessageSource{
+						Chat:     parsedChat.ToNonAD(),
+						Sender:   parsedSender.ToNonAD(),
+						IsFromMe: msg.IsFromMe,
+						IsGroup:  parsedChat.Server == waTypes.GroupServer,
+					},
+					ID:        msg.MsgID,
+					Timestamp: time.Unix(msg.Timestamp, 0),
+				}
+				if sendErr := client.SendMediaRetryReceipt(dlCtx, msgInfo, mediaKey); sendErr == nil {
+					select {
+					case retryEvt := <-retryCh:
+						if retryData, decErr := whatsmeow.DecryptMediaRetryNotification(retryEvt, mediaKey); decErr == nil &&
+							retryData.GetResult() == waMmsRetry.MediaRetryNotification_SUCCESS &&
+							retryData.GetDirectPath() != "" {
+							updateMediaDirectPath(&core, retryData.GetDirectPath())
+							data, _, _, dlErr = utils.DownloadMedia(dlCtx, client, &core)
+						}
+					case <-time.After(6 * time.Second):
+					case <-dlCtx.Done():
+					}
+				}
+				h.mediaFetchMu.Lock()
+				delete(h.mediaRetryWaiters, flightKey)
+				h.mediaFetchMu.Unlock()
+			}
+		}
+	}
+
+	if dlErr != nil || len(data) == 0 {
+		if !wantAudio && msg.ThumbPath != "" {
+			return msg.ThumbPath, "image/jpeg", true, nil
+		}
+		if dlErr != nil {
+			return "", "", false, dlErr
+		}
+		return "", "", false, fmt.Errorf("empty media download")
+	}
+
+	mimeOut := msg.MediaMime
+	ext := extensionForMime(mimeOut, ".bin")
+	mediaRel, saveErr := h.store.SaveMediaFile(acct, msg.MsgID, ext, data)
+	if saveErr != nil {
+		return "", "", false, saveErr
+	}
+
+	var audioRel string
+	if stk := core.GetStickerMessage(); stk != nil && stk.GetAudioMessage() != nil {
+		if audBytes, aErr := client.Download(dlCtx, stk.GetAudioMessage()); aErr == nil && len(audBytes) > 0 {
+			if rel, sErr := h.store.SaveMediaFile(acct, msg.MsgID, "_audio.ogg", audBytes); sErr == nil {
+				audioRel = rel
+			}
+		}
+	}
+
+	h.store.UpdateMediaPaths(acct, msg.MsgID, mediaRel, audioRel, mimeOut)
+	h.store.Flush()
+	h.Broadcast("media_ready", map[string]any{
+		"accountId": acct,
+		"chatJid":   msg.ChatJID,
+		"msgId":     msg.MsgID,
+		"mediaPath": mediaRel,
+		"audioPath": audioRel,
+		"mediaMime": mimeOut,
+	})
+
+	if wantAudio {
+		if audioRel != "" {
+			return audioRel, "audio/ogg; codecs=opus", false, nil
+		}
+		return "", "", false, fmt.Errorf("audio track unavailable")
+	}
+	return mediaRel, mimeOut, false, nil
 }
 
 // IngestHistorySync imports all conversations and messages from WhatsApp's HistorySync
@@ -833,6 +1145,13 @@ func (h *Hub) IngestHistorySync(client *whatsmeow.Client, evt *events.HistorySyn
 				}
 			}
 
+			var mediaProto []byte
+			var thumbPath string
+			if msgType != "text" {
+				mediaProto = marshalMediaProto(core)
+				thumbPath = h.saveMediaThumb(acct, key.GetID(), core)
+			}
+
 			h.store.RecordMessage(db.StoredMessage{
 				AccountID:           acct,
 				MsgID:               key.GetID(),
@@ -845,7 +1164,10 @@ func (h *Hub) IngestHistorySync(client *whatsmeow.Client, evt *events.HistorySyn
 				Caption:             caption,
 				IsViewOnce:          utils.IsViewOnceMessage(nil, raw),
 				MediaMime:           mimeType,
-				Timestamp:           int64(webMsg.GetMessageTimestamp()),
+				ThumbPath:           thumbPath,
+				HasMedia:            thumbPath != "" || len(mediaProto) > 0,
+				MediaProto:          mediaProto,
+				Timestamp:           db.NormalizeUnixSeconds(int64(webMsg.GetMessageTimestamp())),
 				ChatName:            chatName,
 				ChatIsGroup:         isGroup,
 				SkipUnreadIncrement: true,
@@ -855,6 +1177,7 @@ func (h *Hub) IngestHistorySync(client *whatsmeow.Client, evt *events.HistorySyn
 	}
 
 	if importedChats > 0 || importedMsgs > 0 {
+		h.store.RepairChatSummaries(acct)
 		h.store.Flush()
 		fmt.Printf("📥 [WEBCHAT] Imported %d chats & %d historical messages (%s) into sequential SQLite for %s\n",
 			importedChats, importedMsgs, evt.Data.GetSyncType().String(), acct)
@@ -1085,6 +1408,7 @@ func (h *Hub) SyncAccount(client *whatsmeow.Client) (contactsCount, groupsCount 
 		}
 	}
 
+	h.store.RepairChatSummaries(acct)
 	h.store.Flush()
 	h.Broadcast("accounts_updated", nil)
 	fmt.Printf("🔄 [WEBCHAT] Synced %d contacts & %d groups for %s\n", contactsCount, groupsCount, acct)

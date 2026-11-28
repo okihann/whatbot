@@ -1,6 +1,8 @@
 package web
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -251,5 +253,115 @@ func TestIngestMessageFixes(t *testing.T) {
 	histMsgs, _ := chatStore.ListMessages("628111000", histPN.String(), 50)
 	if len(histMsgs) != 2 {
 		t.Fatalf("expected 2 HistorySync messages under %s, got %d", histPN.String(), len(histMsgs))
+	}
+}
+
+func TestOldMessagesRepairAndHistoricalMediaFallback(t *testing.T) {
+	dir := t.TempDir()
+	chatStore, err := db.OpenChatStore(filepath.Join(dir, "webchat.db"), filepath.Join(dir, "webmedia"))
+	if err != nil {
+		t.Fatalf("OpenChatStore: %v", err)
+	}
+	defer chatStore.Close()
+
+	hub := NewHub(chatStore, nil, &mockAccountManager{})
+	cli := newTestFakeClient("628111000")
+
+	// 1. Historical photo with JPEGThumbnail & millisecond timestamp (> 1e12) + convTS > msgTS.
+	fakeJPEG := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0xFF, 0xD9}
+	peerJID := waTypes.NewJID("628555111222", waTypes.DefaultUserServer)
+	hub.IngestHistorySync(cli, &events.HistorySync{
+		Data: &waHistorySync.HistorySync{
+			SyncType: waHistorySync.HistorySync_FULL.Enum(),
+			Conversations: []*waHistorySync.Conversation{
+				{
+					ID:                    proto.String(peerJID.String()),
+					Name:                  proto.String("Dana"),
+					ConversationTimestamp: proto.Uint64(1700005000000), // milliseconds!
+					Messages: []*waHistorySync.HistorySyncMsg{
+						{
+							Message: &waWeb.WebMessageInfo{
+								Key: &waCommon.MessageKey{
+									ID:     proto.String("OLD-PHOTO-1"),
+									FromMe: proto.Bool(false),
+								},
+								MessageTimestamp: proto.Uint64(1700004900000), // milliseconds, earlier than convTS!
+								PushName:         proto.String("Dana"),
+								Message: &waE2E.Message{
+									ImageMessage: &waE2E.ImageMessage{
+										Caption:       proto.String("Old vacation photo"),
+										Mimetype:      proto.String("image/jpeg"),
+										DirectPath:    proto.String("/v/t62.7118-24/expired"),
+										JPEGThumbnail: fakeJPEG,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	// Timestamp must be normalized to Unix seconds, and last_message must be populated even though convTS > msgTS.
+	chats, err := chatStore.ListChats("628111000", "", "all")
+	if err != nil || len(chats) != 1 {
+		t.Fatalf("expected 1 chat, got %+v (err=%v)", chats, err)
+	}
+	if chats[0].LastTimestamp != 1700005000 {
+		t.Fatalf("expected normalized seconds timestamp 1700005000, got %d", chats[0].LastTimestamp)
+	}
+	if chats[0].LastMessage == "" {
+		t.Fatalf("expected non-empty last_message after HistorySync repair, got empty")
+	}
+
+	msgs, err := chatStore.ListMessages("628111000", peerJID.String(), 50)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("expected 1 historical photo message, got %+v (err=%v)", msgs, err)
+	}
+	if !msgs[0].HasMedia || msgs[0].ThumbPath == "" {
+		t.Fatalf("expected HasMedia=true and saved ThumbPath for historical image, got %+v", msgs[0])
+	}
+	if msgs[0].Timestamp != 1700004900 {
+		t.Fatalf("expected normalized message timestamp 1700004900, got %d", msgs[0].Timestamp)
+	}
+
+	// Requesting /api/wa/media/{acct}/{msgId} while offline/expired must fall back to the saved JPEG thumbnail!
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/wa/media/628111000/OLD-PHOTO-1", nil)
+	hub.handleMedia(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 thumbnail fallback for old historical image, got %d", rec.Code)
+	}
+	if rec.Header().Get("X-Media-Fallback") != "thumbnail" {
+		t.Fatalf("expected X-Media-Fallback=thumbnail header, got %q", rec.Header().Get("X-Media-Fallback"))
+	}
+	if rec.Header().Get("Content-Type") != "image/jpeg" || rec.Body.Len() != len(fakeJPEG) {
+		t.Fatalf("unexpected thumbnail body/content-type: ct=%q len=%d", rec.Header().Get("Content-Type"), rec.Body.Len())
+	}
+
+	// 2. DeviceSentMessage outgoing DM with Chat=self and DestinationJID=recipient routes to recipient chat.
+	selfJID := waTypes.NewJID("628111000", waTypes.DefaultUserServer)
+	destJID := waTypes.NewJID("628444333222", waTypes.DefaultUserServer)
+	hub.IngestMessage(cli, &events.Message{
+		Info: waTypes.MessageInfo{
+			MessageSource: waTypes.MessageSource{
+				Chat:     selfJID,
+				Sender:   selfJID,
+				IsFromMe: true,
+			},
+			ID:        "PHONE-OUT-1",
+			Timestamp: time.Unix(1700006000, 0),
+			DeviceSentMeta: &waTypes.DeviceSentMeta{
+				DestinationJID: destJID.String(),
+			},
+		},
+		Message: &waE2E.Message{
+			Conversation: proto.String("Sent from my phone!"),
+		},
+	})
+	destMsgs, _ := chatStore.ListMessages("628111000", destJID.String(), 50)
+	if len(destMsgs) != 1 || destMsgs[0].Body != "Sent from my phone!" {
+		t.Fatalf("expected phone-sent DM to route to DestinationJID %s, got %+v", destJID.String(), destMsgs)
 	}
 }
