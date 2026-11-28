@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,23 +32,24 @@ type StoredChat struct {
 // StoredMessage represents a persisted message (including recovered view-once
 // media and anti-delete history) rendered by the WhatsApp Web UI.
 type StoredMessage struct {
-	AccountID   string `json:"accountId"`
-	MsgID       string `json:"msgId"`
-	ChatJID     string `json:"chatJid"`
-	SenderJID   string `json:"senderJid"`
-	SenderName  string `json:"senderName"`
-	IsFromMe    bool   `json:"isFromMe"`
-	MsgType     string `json:"msgType"` // text, image, video, audio, sticker, sound_sticker, document
-	Body        string `json:"body"`
-	Caption     string `json:"caption"`
-	IsViewOnce  bool   `json:"isViewOnce"`
-	IsDeleted   bool   `json:"isDeleted"`
-	MediaMime   string `json:"mediaMime"`
-	MediaPath   string `json:"mediaPath"`
-	AudioPath   string `json:"audioPath"`
-	Timestamp   int64  `json:"timestamp"`
-	ChatName    string `json:"-"`
-	ChatIsGroup bool   `json:"-"`
+	AccountID           string `json:"accountId"`
+	MsgID               string `json:"msgId"`
+	ChatJID             string `json:"chatJid"`
+	SenderJID           string `json:"senderJid"`
+	SenderName          string `json:"senderName"`
+	IsFromMe            bool   `json:"isFromMe"`
+	MsgType             string `json:"msgType"` // text, image, video, audio, sticker, sound_sticker, document
+	Body                string `json:"body"`
+	Caption             string `json:"caption"`
+	IsViewOnce          bool   `json:"isViewOnce"`
+	IsDeleted           bool   `json:"isDeleted"`
+	MediaMime           string `json:"mediaMime"`
+	MediaPath           string `json:"mediaPath"`
+	AudioPath           string `json:"audioPath"`
+	Timestamp           int64  `json:"timestamp"`
+	ChatName            string `json:"-"`
+	ChatIsGroup         bool   `json:"-"`
+	SkipUnreadIncrement bool   `json:"-"`
 }
 
 // StoredContact represents a synced WhatsApp contact stored for the Web UI.
@@ -82,12 +84,14 @@ type writeOp struct {
 // ChatStore persists chats, contacts, and messages into a dedicated sequential-WAL
 // SQLite database with a batched background writer goroutine.
 type ChatStore struct {
-	db        *sql.DB
-	mediaRoot string
-	writes    chan writeOp
-	stopCh    chan struct{}
-	wg        sync.WaitGroup
-	closeOnce sync.Once
+	db            *sql.DB
+	mediaRoot     string
+	writes        chan writeOp
+	stopCh        chan struct{}
+	wg            sync.WaitGroup
+	closeOnce     sync.Once
+	closed        atomic.Bool
+	pendingWrites atomic.Int64
 }
 
 // OpenChatStore initializes db/webchat.db and its sequential batch writer.
@@ -183,10 +187,12 @@ func (cs *ChatStore) writeLoop() {
 		if len(batch) == 0 {
 			return
 		}
+		var drained int64
 		tx, err := cs.db.Begin()
 		if err == nil {
 			for _, op := range batch {
 				if op.fn != nil {
+					drained++
 					if opErr := op.fn(tx); opErr != nil {
 						fmt.Printf("[WEBCHAT] write error: %v\n", opErr)
 					}
@@ -195,6 +201,15 @@ func (cs *ChatStore) writeLoop() {
 			if commitErr := tx.Commit(); commitErr != nil {
 				fmt.Printf("[WEBCHAT] commit error: %v\n", commitErr)
 			}
+		} else {
+			for _, op := range batch {
+				if op.fn != nil {
+					drained++
+				}
+			}
+		}
+		if drained > 0 {
+			cs.pendingWrites.Add(-drained)
 		}
 		for _, op := range batch {
 			if op.done != nil {
@@ -237,29 +252,43 @@ func (cs *ChatStore) writeLoop() {
 }
 
 func (cs *ChatStore) enqueue(fn func(tx *sql.Tx) error) {
+	if cs.closed.Load() {
+		return
+	}
+	cs.pendingWrites.Add(1)
 	select {
 	case cs.writes <- writeOp{fn: fn}:
 	default:
 		// Queue saturated: run synchronously so messages are never lost.
 		tx, err := cs.db.Begin()
 		if err == nil {
-			_ = fn(tx)
+			if opErr := fn(tx); opErr != nil {
+				fmt.Printf("[WEBCHAT] sync write error: %v\n", opErr)
+			}
 			_ = tx.Commit()
 		}
+		cs.pendingWrites.Add(-1)
 	}
 }
 
 // Flush blocks until all queued sequential writes have been committed to WAL.
 func (cs *ChatStore) Flush() {
+	if cs == nil || cs.closed.Load() || cs.pendingWrites.Load() <= 0 {
+		return
+	}
 	done := make(chan struct{})
-	cs.writes <- writeOp{done: done}
-	<-done
+	select {
+	case cs.writes <- writeOp{done: done}:
+		<-done
+	case <-cs.stopCh:
+	}
 }
 
 // Close drains pending writes, checkpoints the WAL, and closes SQLite.
 func (cs *ChatStore) Close() error {
 	var err error
 	cs.closeOnce.Do(func() {
+		cs.closed.Store(true)
 		close(cs.stopCh)
 		cs.wg.Wait()
 		err = CheckpointAndClose(cs.db)
@@ -362,7 +391,7 @@ func (cs *ChatStore) RecordMessage(m StoredMessage) {
 	}
 
 	unreadDelta := 1
-	if m.IsFromMe {
+	if m.IsFromMe || m.SkipUnreadIncrement {
 		unreadDelta = 0
 	}
 
@@ -374,6 +403,7 @@ func (cs *ChatStore) RecordMessage(m StoredMessage) {
 				media_mime, media_path, audio_path, timestamp
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(account_id, msg_id) DO UPDATE SET
+				chat_jid = CASE WHEN messages.chat_jid LIKE '%@lid' AND excluded.chat_jid NOT LIKE '%@lid' THEN excluded.chat_jid ELSE messages.chat_jid END,
 				body = CASE WHEN excluded.body != '' THEN excluded.body ELSE messages.body END,
 				caption = CASE WHEN excluded.caption != '' THEN excluded.caption ELSE messages.caption END,
 				media_mime = CASE WHEN excluded.media_mime != '' THEN excluded.media_mime ELSE messages.media_mime END,
@@ -497,6 +527,7 @@ func (cs *ChatStore) UpsertContact(c StoredContact) {
 
 // ListContacts returns all synced contacts for an account, optionally filtered by query.
 func (cs *ChatStore) ListContacts(accountID, search string) ([]StoredContact, error) {
+	cs.Flush()
 	query := `
 		SELECT account_id, jid, phone, name, full_name, push_name, business_name, updated_at
 		FROM contacts
@@ -551,6 +582,116 @@ func (cs *ChatStore) UpdateMediaPaths(accountID, msgID, mediaPath, audioPath, mi
 	})
 }
 
+// UpdateMessageBody updates the text or caption of an edited message.
+func (cs *ChatStore) UpdateMessageBody(accountID, msgID, newBody, newCaption string) {
+	if accountID == "" || msgID == "" {
+		return
+	}
+	cs.enqueue(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`
+			UPDATE messages
+			SET body = CASE WHEN ? != '' THEN ? ELSE body END,
+			    caption = CASE WHEN ? != '' THEN ? ELSE caption END
+			WHERE account_id = ? AND msg_id = ?
+		`, newBody, newBody, newCaption, newCaption, accountID, msgID)
+		return err
+	})
+}
+
+// ListLIDChatJIDs returns all @lid chat JIDs stored for an account so SyncAccount
+// can merge them into their canonical @s.whatsapp.net phone-number JIDs.
+func (cs *ChatStore) ListLIDChatJIDs(accountID string) ([]string, error) {
+	cs.Flush()
+	rows, err := cs.db.Query(`
+		SELECT chat_jid FROM chats
+		WHERE account_id = ? AND LOWER(chat_jid) LIKE '%@lid'
+	`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var jid string
+		if err := rows.Scan(&jid); err != nil {
+			return nil, err
+		}
+		out = append(out, jid)
+	}
+	return out, rows.Err()
+}
+
+// MergeChatJID moves all messages from an alias/LID chat JID (fromJID) into its
+// canonical chat JID (toJID) and consolidates the chat summary row so messages
+// are never split across duplicate @lid and @s.whatsapp.net threads.
+func (cs *ChatStore) MergeChatJID(accountID, fromJID, toJID string) {
+	fromJID = strings.TrimSpace(fromJID)
+	toJID = strings.TrimSpace(toJID)
+	if accountID == "" || fromJID == "" || toJID == "" || fromJID == toJID || IsIgnoredWebChatJID(toJID) {
+		return
+	}
+	cs.enqueue(func(tx *sql.Tx) error {
+		// Reassign messages from fromJID to toJID.
+		if _, err := tx.Exec(`
+			UPDATE messages
+			SET chat_jid = ?
+			WHERE account_id = ? AND chat_jid = ?
+		`, toJID, accountID, fromJID); err != nil {
+			return err
+		}
+
+		// Read the legacy/LID chat row if it exists.
+		var fromName, fromLastMsg string
+		var fromIsGroup, fromUnread, fromHasVO int
+		var fromLastTS int64
+		err := tx.QueryRow(`
+			SELECT name, is_group, last_message, last_timestamp, unread_count, has_view_once
+			FROM chats
+			WHERE account_id = ? AND chat_jid = ?
+		`, accountID, fromJID).Scan(&fromName, &fromIsGroup, &fromLastMsg, &fromLastTS, &fromUnread, &fromHasVO)
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+
+		// Don't copy a raw LID number as the display name of the PN chat.
+		fromPrefix := strings.Split(fromJID, "@")[0]
+		if fromName == fromJID || fromName == fromPrefix {
+			fromName = ""
+		}
+
+		// Upsert/merge into the canonical chat row.
+		_, err = tx.Exec(`
+			INSERT INTO chats (account_id, chat_jid, name, is_group, last_message, last_timestamp, unread_count, has_view_once)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(account_id, chat_jid) DO UPDATE SET
+				name = CASE
+					WHEN (chats.name = '' OR chats.name = chats.chat_jid OR chats.name = SUBSTR(chats.chat_jid, 1, INSTR(chats.chat_jid, '@') - 1))
+					 AND excluded.name != ''
+					THEN excluded.name
+					ELSE chats.name
+				END,
+				is_group = MAX(chats.is_group, excluded.is_group),
+				last_message = CASE
+					WHEN excluded.last_timestamp > chats.last_timestamp AND excluded.last_message != '' THEN excluded.last_message
+					WHEN chats.last_message = '' AND excluded.last_message != '' THEN excluded.last_message
+					ELSE chats.last_message
+				END,
+				last_timestamp = MAX(chats.last_timestamp, excluded.last_timestamp),
+				unread_count = MAX(chats.unread_count, excluded.unread_count),
+				has_view_once = MAX(chats.has_view_once, excluded.has_view_once)
+		`, accountID, toJID, fromName, fromIsGroup, fromLastMsg, fromLastTS, fromUnread, fromHasVO)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.Exec(`DELETE FROM chats WHERE account_id = ? AND chat_jid = ?`, accountID, fromJID)
+		return err
+	})
+}
+
 func (cs *ChatStore) MarkDeleted(accountID, msgID string) {
 	cs.enqueue(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`UPDATE messages SET is_deleted = 1 WHERE account_id = ? AND msg_id = ?`, accountID, msgID)
@@ -566,6 +707,7 @@ func (cs *ChatStore) MarkChatRead(accountID, chatJID string) {
 }
 
 func (cs *ChatStore) ListChats(accountID, search, filter string) ([]StoredChat, error) {
+	cs.Flush()
 	query := `
 		SELECT account_id, chat_jid, name, is_group, last_message, last_timestamp, unread_count, has_view_once
 		FROM chats
@@ -611,6 +753,7 @@ func (cs *ChatStore) ListChats(accountID, search, filter string) ([]StoredChat, 
 }
 
 func (cs *ChatStore) ListMessages(accountID, chatJID string, limit int) ([]StoredMessage, error) {
+	cs.Flush()
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -655,7 +798,36 @@ func (cs *ChatStore) ListMessages(accountID, chatJID string, limit int) ([]Store
 	return rev, nil
 }
 
+// GetOldestMessage returns the earliest stored message in a chat, used as the
+// anchor for on-demand WhatsApp history sync requests.
+func (cs *ChatStore) GetOldestMessage(accountID, chatJID string) (*StoredMessage, error) {
+	cs.Flush()
+	var m StoredMessage
+	var fromMe, vo, del int
+	err := cs.db.QueryRow(`
+		SELECT account_id, msg_id, chat_jid, sender_jid, sender_name, is_from_me,
+		       msg_type, body, caption, is_view_once, is_deleted,
+		       media_mime, media_path, audio_path, timestamp
+		FROM messages
+		WHERE account_id = ? AND chat_jid = ?
+		ORDER BY timestamp ASC
+		LIMIT 1
+	`, accountID, chatJID).Scan(
+		&m.AccountID, &m.MsgID, &m.ChatJID, &m.SenderJID, &m.SenderName, &fromMe,
+		&m.MsgType, &m.Body, &m.Caption, &vo, &del,
+		&m.MediaMime, &m.MediaPath, &m.AudioPath, &m.Timestamp,
+	)
+	if err != nil {
+		return nil, err
+	}
+	m.IsFromMe = fromMe == 1
+	m.IsViewOnce = vo == 1
+	m.IsDeleted = del == 1
+	return &m, nil
+}
+
 func (cs *ChatStore) GetMessage(accountID, msgID string) (*StoredMessage, error) {
+	cs.Flush()
 	var m StoredMessage
 	var fromMe, vo, del int
 	err := cs.db.QueryRow(`

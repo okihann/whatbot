@@ -234,7 +234,10 @@
           <div class="chat-sub" id="headerSub"></div>
         </div>
       </div>
-      <button class="btn-sm" id="refreshMsgsBtn">Refresh</button>
+      <div style="display:flex;gap:6px;flex-shrink:0;">
+        <button class="btn-sm" id="loadOlderBtn" title="Request older messages from your phone via WhatsApp History Sync">⬆ Older</button>
+        <button class="btn-sm" id="refreshMsgsBtn">Refresh</button>
+      </div>
     </div>
 
     <div class="empty-state" id="emptyState">
@@ -701,6 +704,10 @@
     if (m.msgType === 'text') return '';
     const src = mediaUrl(m.accountId, m.msgId);
     if (!m.mediaPath) {
+      const ageSec = m.timestamp ? (Math.floor(Date.now() / 1000) - m.timestamp) : 0;
+      if (ageSec > 90) {
+        return `<div class="media-pending">📎 ${escapeHtml(m.msgType)} (synced from history)</div>`;
+      }
       return `<div class="media-pending">⏳ Capturing ${escapeHtml(m.msgType)} media...</div>`;
     }
     switch (m.msgType) {
@@ -849,6 +856,10 @@
 
     es.addEventListener('ready', () => {
       $('sseDot').classList.remove('offline');
+      if (state.authenticated && state.account) {
+        if (state.filter !== 'contacts') loadChats();
+        if (state.activeChat) loadMessages(false);
+      }
     });
 
     es.onerror = () => {
@@ -877,16 +888,45 @@
       loadAccounts();
     });
 
+    es.addEventListener('history_synced', (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.accountId && d.accountId !== state.account) return;
+        if (state.filter !== 'contacts') loadChats();
+        if (state.activeChat) {
+          if (!Array.isArray(d.chats) || d.chats.length === 0 || d.chats.includes(state.activeChat.chatJid)) {
+            loadMessages(false);
+          }
+        }
+      } catch {}
+    });
+
     es.addEventListener('message', (e) => {
       try {
         const m = JSON.parse(e.data);
         if (m.accountId !== state.account) return;
-        loadChats();
+        if (state.filter !== 'contacts') loadChats();
         if (state.activeChat && m.chatJid === state.activeChat.chatJid) {
           const idx = state.messages.findIndex(x => x.msgId === m.msgId);
           if (idx >= 0) state.messages[idx] = m;
           else state.messages.push(m);
           renderMessages(false);
+        }
+      } catch {}
+    });
+
+    es.addEventListener('message_edited', (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.accountId !== state.account) return;
+        if (state.filter !== 'contacts') loadChats();
+        if (state.activeChat && d.chatJid === state.activeChat.chatJid) {
+          const msg = state.messages.find(x => x.msgId === d.msgId);
+          if (msg) {
+            if (d.body) msg.body = d.body;
+            if (d.caption) msg.caption = d.caption;
+            renderMessages(false);
+          }
         }
       } catch {}
     });
@@ -1032,7 +1072,34 @@
   });
 
   $('backBtn').addEventListener('click', () => $('app').classList.remove('chat-open'));
-  $('refreshMsgsBtn').addEventListener('click', () => loadMessages(true));
+  $('refreshMsgsBtn').addEventListener('click', () => {
+    if (state.filter !== 'contacts') loadChats();
+    loadMessages(true);
+  });
+  $('loadOlderBtn').addEventListener('click', async () => {
+    if (!state.account || !state.activeChat) return;
+    const btn = $('loadOlderBtn');
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ Requesting...';
+    try {
+      await apiFetch('/api/wa/chats/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountId: state.account,
+          chatJid: state.activeChat.chatJid,
+          count: 50,
+        }),
+      });
+      showToast('History request sent to phone — messages will appear shortly');
+    } catch (e) {
+      if (e.message !== 'Unauthorized') showToast(`Could not request older history: ${e.message}`);
+    } finally {
+      btn.textContent = prev;
+      btn.disabled = false;
+    }
+  });
   $('cancelReplyBtn').addEventListener('click', clearQuote);
 
   $('attachBtn').addEventListener('click', () => $('fileInput').click());
@@ -1246,6 +1313,19 @@
       showToast(e.message);
     }
   });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && state.authenticated && state.account) {
+      if (state.filter !== 'contacts') loadChats();
+      if (state.activeChat) loadMessages(false);
+    }
+  });
+
+  setInterval(() => {
+    if (document.hidden || !state.authenticated || !state.account) return;
+    if (state.filter !== 'contacts') loadChats();
+    if (state.activeChat) loadMessages(false);
+  }, 12000);
 
   (async () => {
     const ok = await loadStatus();

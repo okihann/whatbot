@@ -70,6 +70,7 @@ func (h *Hub) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/api/wa/events", withSecurityHeaders(h.requireAuth(h.handleSSE)))
 	mux.HandleFunc("/api/wa/chats", withSecurityHeaders(h.requireAuth(h.handleChats)))
 	mux.HandleFunc("/api/wa/chats/read", withSecurityHeaders(h.requireAuth(h.handleMarkRead)))
+	mux.HandleFunc("/api/wa/chats/history", withSecurityHeaders(h.requireAuth(h.handleRequestHistory)))
 	mux.HandleFunc("/api/wa/contacts", withSecurityHeaders(h.requireAuth(h.handleContacts)))
 	mux.HandleFunc("/api/wa/avatar", withSecurityHeaders(h.requireAuth(h.handleAvatar)))
 	mux.HandleFunc("/api/wa/sync", withSecurityHeaders(h.requireAuth(h.handleSync)))
@@ -217,8 +218,9 @@ func (h *Hub) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	ch, unsub := h.Subscribe()
 	defer unsub()
@@ -250,6 +252,7 @@ func (h *Hub) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) handleChats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	acct := strings.TrimSpace(r.URL.Query().Get("account"))
 	if acct == "" && h.accounts != nil {
 		if list := h.accounts.ListAccounts(); len(list) > 0 {
@@ -283,8 +286,51 @@ func (h *Hub) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.store.MarkChatRead(req.AccountID, req.ChatJID)
+	h.store.Flush()
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (h *Hub) handleRequestHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	var req struct {
+		AccountID string `json:"accountId"`
+		ChatJID   string `json:"chatJid"`
+		Count     int    `json:"count"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]string{"error": "invalid json"})
+		return
+	}
+	acct := strings.TrimSpace(req.AccountID)
+	if acct == "" {
+		acct = h.resolveActiveAccount(r)
+	}
+	chatJID := strings.TrimSpace(req.ChatJID)
+	if acct == "" || chatJID == "" || h.accounts == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]string{"error": "accountId and chatJid required"})
+		return
+	}
+	cli, ok := h.accounts.GetClient(acct)
+	if !ok || cli == nil {
+		w.WriteHeader(http.StatusNotFound)
+		writeJSON(w, map[string]string{"error": "account not connected"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := h.RequestChatHistory(ctx, cli, acct, chatJID, req.Count); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "status": "requested"})
 }
 
 func (h *Hub) resolveActiveAccount(r *http.Request) string {
@@ -390,6 +436,7 @@ func (h *Hub) handleSync(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) handleMessages(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	acct := strings.TrimSpace(r.URL.Query().Get("account"))
 	chat := strings.TrimSpace(r.URL.Query().Get("chat"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -553,20 +600,22 @@ func (h *Hub) handleSendText(w http.ResponseWriter, r *http.Request) {
 	}
 
 	acct := accountKey(client)
+	canonicalTarget := resolveCanonicalChatJID(client, targetJID, waTypes.EmptyJID, waTypes.EmptyJID, targetJID.Server == waTypes.GroupServer, true, nil)
 	stored := db.StoredMessage{
 		AccountID:   acct,
 		MsgID:       resp.ID,
-		ChatJID:     targetJID.ToNonAD().String(),
+		ChatJID:     canonicalTarget.String(),
 		SenderJID:   client.Store.ID.ToNonAD().String(),
 		SenderName:  "You",
 		IsFromMe:    true,
 		MsgType:     "text",
 		Body:        req.Text,
 		Timestamp:   time.Now().Unix(),
-		ChatName:    targetJID.ToNonAD().User,
-		ChatIsGroup: targetJID.Server == waTypes.GroupServer,
+		ChatName:    canonicalTarget.User,
+		ChatIsGroup: canonicalTarget.Server == waTypes.GroupServer,
 	}
 	h.store.RecordMessage(stored)
+	h.store.Flush()
 	h.Broadcast("message", stored)
 
 	writeJSON(w, map[string]any{"ok": true, "id": resp.ID, "message": stored})
@@ -700,11 +749,12 @@ func (h *Hub) handleSendMedia(w http.ResponseWriter, r *http.Request) {
 	}
 
 	acct := accountKey(client)
+	canonicalTarget := resolveCanonicalChatJID(client, targetJID, waTypes.EmptyJID, waTypes.EmptyJID, targetJID.Server == waTypes.GroupServer, true, nil)
 	mediaRel, _ := h.store.SaveMediaFile(acct, sendResp.ID, extensionForMime(mimeType, ".bin"), data)
 	stored := db.StoredMessage{
 		AccountID:   acct,
 		MsgID:       sendResp.ID,
-		ChatJID:     targetJID.ToNonAD().String(),
+		ChatJID:     canonicalTarget.String(),
 		SenderJID:   client.Store.ID.ToNonAD().String(),
 		SenderName:  "You",
 		IsFromMe:    true,
@@ -714,10 +764,11 @@ func (h *Hub) handleSendMedia(w http.ResponseWriter, r *http.Request) {
 		MediaMime:   mimeType,
 		MediaPath:   mediaRel,
 		Timestamp:   time.Now().Unix(),
-		ChatName:    targetJID.ToNonAD().User,
-		ChatIsGroup: targetJID.Server == waTypes.GroupServer,
+		ChatName:    canonicalTarget.User,
+		ChatIsGroup: canonicalTarget.Server == waTypes.GroupServer,
 	}
 	h.store.RecordMessage(stored)
+	h.store.Flush()
 	h.Broadcast("message", stored)
 
 	writeJSON(w, map[string]any{"ok": true, "id": sendResp.ID, "message": stored})

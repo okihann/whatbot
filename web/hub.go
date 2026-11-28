@@ -65,6 +65,17 @@ type Hub struct {
 
 	avatarMu   sync.Mutex
 	avatarMiss map[string]time.Time
+
+	lidMu      sync.Mutex
+	mergedLIDs map[string]string
+
+	groupMu    sync.Mutex
+	groupNames map[string]groupNameEntry
+}
+
+type groupNameEntry struct {
+	name    string
+	expires time.Time
 }
 
 func NewHub(chatStore *db.ChatStore, sessionDB *sql.DB, accounts AccountManager) *Hub {
@@ -77,6 +88,8 @@ func NewHub(chatStore *db.ChatStore, sessionDB *sql.DB, accounts AccountManager)
 		subscribers: make(map[chan SSEEvent]struct{}),
 		qrStatus:    "idle",
 		avatarMiss:  make(map[string]time.Time),
+		mergedLIDs:  make(map[string]string),
+		groupNames:  make(map[string]groupNameEntry),
 	}
 }
 
@@ -206,8 +219,12 @@ func classifyMessageForWeb(core *waE2E.Message) (msgType, body, caption, mimeTyp
 	switch {
 	case core.ImageMessage != nil:
 		return "image", "", core.ImageMessage.GetCaption(), core.ImageMessage.GetMimetype()
+	case core.InstantImageMessage != nil:
+		return "image", "", core.InstantImageMessage.GetCaption(), core.InstantImageMessage.GetMimetype()
 	case core.VideoMessage != nil:
 		return "video", "", core.VideoMessage.GetCaption(), core.VideoMessage.GetMimetype()
+	case core.PtvMessage != nil:
+		return "video", "", core.PtvMessage.GetCaption(), core.PtvMessage.GetMimetype()
 	case core.AudioMessage != nil:
 		return "audio", "", "", core.AudioMessage.GetMimetype()
 	case core.StickerMessage != nil:
@@ -221,6 +238,95 @@ func classifyMessageForWeb(core *waE2E.Message) (msgType, body, caption, mimeTyp
 			cap = core.DocumentMessage.GetFileName()
 		}
 		return "document", "", cap, core.DocumentMessage.GetMimetype()
+	case core.Conversation != nil && strings.TrimSpace(core.GetConversation()) != "":
+		return "text", core.GetConversation(), "", ""
+	case core.ExtendedTextMessage != nil && strings.TrimSpace(core.ExtendedTextMessage.GetText()) != "":
+		return "text", core.ExtendedTextMessage.GetText(), "", ""
+	case core.LocationMessage != nil:
+		loc := core.LocationMessage
+		label := strings.TrimSpace(loc.GetName())
+		if addr := strings.TrimSpace(loc.GetAddress()); addr != "" {
+			if label != "" {
+				label += " — " + addr
+			} else {
+				label = addr
+			}
+		}
+		if label == "" {
+			label = fmt.Sprintf("%.5f, %.5f", loc.GetDegreesLatitude(), loc.GetDegreesLongitude())
+		}
+		return "text", "📍 Location: " + label, "", ""
+	case core.LiveLocationMessage != nil:
+		loc := core.LiveLocationMessage
+		cap := strings.TrimSpace(loc.GetCaption())
+		if cap == "" {
+			cap = fmt.Sprintf("%.5f, %.5f", loc.GetDegreesLatitude(), loc.GetDegreesLongitude())
+		}
+		return "text", "📍 Live Location: " + cap, "", ""
+	case core.ContactMessage != nil:
+		name := strings.TrimSpace(core.ContactMessage.GetDisplayName())
+		if name == "" {
+			name = "Contact"
+		}
+		return "text", "👤 Contact: " + name, "", ""
+	case core.ContactsArrayMessage != nil:
+		name := strings.TrimSpace(core.ContactsArrayMessage.GetDisplayName())
+		if name == "" {
+			name = fmt.Sprintf("%d contacts", len(core.ContactsArrayMessage.GetContacts()))
+		}
+		return "text", "👥 Contacts: " + name, "", ""
+	case core.PollCreationMessage != nil:
+		return "text", "📊 Poll: " + core.PollCreationMessage.GetName(), "", ""
+	case core.PollCreationMessageV2 != nil:
+		return "text", "📊 Poll: " + core.PollCreationMessageV2.GetName(), "", ""
+	case core.PollCreationMessageV3 != nil:
+		return "text", "📊 Poll: " + core.PollCreationMessageV3.GetName(), "", ""
+	case core.PollCreationMessageV5 != nil:
+		return "text", "📊 Poll: " + core.PollCreationMessageV5.GetName(), "", ""
+	case core.PollCreationMessageV6 != nil:
+		return "text", "📊 Poll: " + core.PollCreationMessageV6.GetName(), "", ""
+	case core.EventMessage != nil:
+		name := strings.TrimSpace(core.EventMessage.GetName())
+		if name == "" {
+			name = "Event"
+		}
+		return "text", "📅 Event: " + name, "", ""
+	case core.AlbumMessage != nil:
+		total := core.AlbumMessage.GetExpectedImageCount() + core.AlbumMessage.GetExpectedVideoCount()
+		if total > 0 {
+			return "text", fmt.Sprintf("🖼️ Album (%d items)", total), "", ""
+		}
+		return "text", "🖼️ Album", "", ""
+	case core.ButtonsMessage != nil:
+		txt := strings.TrimSpace(core.ButtonsMessage.GetContentText())
+		if txt == "" {
+			txt = strings.TrimSpace(core.ButtonsMessage.GetText())
+		}
+		return "text", txt, "", ""
+	case core.ListMessage != nil:
+		txt := strings.TrimSpace(core.ListMessage.GetTitle())
+		if desc := strings.TrimSpace(core.ListMessage.GetDescription()); desc != "" {
+			if txt != "" {
+				txt += "\n" + desc
+			} else {
+				txt = desc
+			}
+		}
+		return "text", txt, "", ""
+	case core.InteractiveMessage != nil:
+		txt := strings.TrimSpace(core.InteractiveMessage.GetBody().GetText())
+		if txt == "" {
+			txt = strings.TrimSpace(core.InteractiveMessage.GetHeader().GetTitle())
+		}
+		return "text", txt, "", ""
+	case core.OrderMessage != nil:
+		txt := strings.TrimSpace(core.OrderMessage.GetMessage())
+		if txt == "" {
+			txt = fmt.Sprintf("🛒 Order (%d items)", core.OrderMessage.GetItemCount())
+		}
+		return "text", txt, "", ""
+	case core.ReactionMessage != nil:
+		return "text", "", "", ""
 	default:
 		return "text", utils.GetTextFromMessage(core), "", ""
 	}
@@ -247,42 +353,143 @@ func resolveContactName(client *whatsmeow.Client, jid waTypes.JID) string {
 	return ""
 }
 
-func resolveWebChatName(client *whatsmeow.Client, info waTypes.MessageInfo) string {
-	if info.IsGroup && client != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-		defer cancel()
-		if gi, err := client.GetGroupInfo(ctx, info.Chat); err == nil && gi != nil && gi.Name != "" {
-			return gi.Name
+// resolveCanonicalChatJID maps DM @lid JIDs to their canonical @s.whatsapp.net
+// phone-number JID whenever available (via SenderAlt/RecipientAlt, HistorySync
+// LID mappings, or whatsmeow's LIDStore), preventing DM threads from splitting
+// across separate @lid and @s.whatsapp.net conversations in the Web UI.
+func resolveCanonicalChatJID(
+	client *whatsmeow.Client,
+	chat, senderAlt, recipientAlt waTypes.JID,
+	isGroup, isFromMe bool,
+	extraLIDMap map[string]string,
+) waTypes.JID {
+	clean := chat.ToNonAD()
+	if isGroup || clean.Server != waTypes.HiddenUserServer || clean.User == "" {
+		return clean
+	}
+
+	// 1. Check live event alt JIDs first (most accurate for incoming/outgoing DMs).
+	var candidates []waTypes.JID
+	if isFromMe {
+		candidates = []waTypes.JID{recipientAlt.ToNonAD(), senderAlt.ToNonAD()}
+	} else {
+		candidates = []waTypes.JID{senderAlt.ToNonAD(), recipientAlt.ToNonAD()}
+	}
+	for _, cand := range candidates {
+		if cand.Server == waTypes.DefaultUserServer && cand.User != "" {
+			return cand
+		}
+	}
+
+	// 2. Check optional HistorySync PhoneNumberToLidMappings map.
+	if len(extraLIDMap) > 0 {
+		for _, key := range []string{clean.String(), clean.User} {
+			if pnStr := strings.TrimSpace(extraLIDMap[key]); pnStr != "" {
+				if parsed, err := waTypes.ParseJID(pnStr); err == nil && parsed.User != "" {
+					if parsed.Server == "" {
+						parsed.Server = waTypes.DefaultUserServer
+					}
+					return parsed.ToNonAD()
+				}
+			}
+		}
+	}
+
+	// 3. Fall back to whatsmeow's persistent LID -> PN store.
+	if client != nil && client.Store != nil && client.Store.LIDs != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		pn, err := client.Store.LIDs.GetPNForLID(ctx, clean)
+		cancel()
+		if err == nil && pn.User != "" {
+			if pn.Server == "" {
+				pn.Server = waTypes.DefaultUserServer
+			}
+			return pn.ToNonAD()
+		}
+	}
+
+	return clean
+}
+
+// maybeMergeLID merges any previously split @lid chat/messages into canonicalJID
+// at most once per (account, lidJID) mapping during the process lifetime.
+func (h *Hub) maybeMergeLID(acct, rawLID, canonicalJID string) {
+	if h == nil || h.store == nil || acct == "" || rawLID == "" || canonicalJID == "" || rawLID == canonicalJID {
+		return
+	}
+	if !strings.HasSuffix(strings.ToLower(rawLID), "@lid") {
+		return
+	}
+	key := acct + "|" + rawLID
+	h.lidMu.Lock()
+	if h.mergedLIDs[key] == canonicalJID {
+		h.lidMu.Unlock()
+		return
+	}
+	h.mergedLIDs[key] = canonicalJID
+	h.lidMu.Unlock()
+
+	h.store.MergeChatJID(acct, rawLID, canonicalJID)
+}
+
+func (h *Hub) cacheGroupName(jid, name string) {
+	if h == nil || jid == "" || strings.TrimSpace(name) == "" {
+		return
+	}
+	h.groupMu.Lock()
+	h.groupNames[jid] = groupNameEntry{
+		name:    strings.TrimSpace(name),
+		expires: time.Now().Add(15 * time.Minute),
+	}
+	h.groupMu.Unlock()
+}
+
+func (h *Hub) resolveWebChatName(client *whatsmeow.Client, info waTypes.MessageInfo, canonicalChat waTypes.JID) string {
+	if info.IsGroup {
+		key := canonicalChat.String()
+		h.groupMu.Lock()
+		entry, ok := h.groupNames[key]
+		h.groupMu.Unlock()
+		if ok && time.Now().Before(entry.expires) && entry.name != "" {
+			return entry.name
+		}
+		if client != nil && client.IsConnected() {
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer cancel()
+			if gi, err := client.GetGroupInfo(ctx, canonicalChat); err == nil && gi != nil && gi.Name != "" {
+				h.cacheGroupName(key, gi.Name)
+				return gi.Name
+			}
 		}
 	}
 	if !info.IsGroup {
-		if saved := resolveContactName(client, info.Chat); saved != "" {
+		if saved := resolveContactName(client, canonicalChat); saved != "" {
 			return saved
+		}
+		if canonicalChat != info.Chat.ToNonAD() {
+			if saved := resolveContactName(client, info.Chat); saved != "" {
+				return saved
+			}
 		}
 		if !info.IsFromMe && strings.TrimSpace(info.PushName) != "" {
 			return strings.TrimSpace(info.PushName)
 		}
-		if pn := utils.ResolvePhoneNumber(client, info.Chat, info.RecipientAlt); pn != "" {
+		if pn := utils.ResolvePhoneNumber(client, canonicalChat, info.RecipientAlt); pn != "" {
 			return pn
 		}
 	}
-	return info.Chat.ToNonAD().User
+	return canonicalChat.ToNonAD().User
 }
 
 // IngestMessage records live incoming/outgoing messages (including view-once
-// media, sound stickers, and revokes) into the sequential ChatStore and pushes
-// real-time updates to connected WhatsApp Web tabs.
+// media, sound stickers, edits, and revokes) into the sequential ChatStore and
+// pushes real-time updates to connected WhatsApp Web tabs.
 func (h *Hub) IngestMessage(client *whatsmeow.Client, msg *events.Message) {
 	if h == nil || h.store == nil || msg == nil || msg.Message == nil {
 		return
 	}
 	acct := accountKey(client)
 	if acct == "" {
-		return
-	}
-
-	core := utils.UnwrapMessage(msg.Message)
-	if core == nil {
 		return
 	}
 
@@ -293,28 +500,72 @@ func (h *Hub) IngestMessage(client *whatsmeow.Client, msg *events.Message) {
 		return
 	}
 
-	// Handle revocations so deleted messages remain visible with a badge.
-	if pm := core.GetProtocolMessage(); pm != nil && pm.GetType() == waE2E.ProtocolMessage_REVOKE {
-		targetID := pm.GetKey().GetID()
-		if targetID == "" {
-			targetID = msg.Info.MsgMetaInfo.TargetID
-		}
-		if targetID != "" {
-			h.store.MarkDeleted(acct, targetID)
-			h.Broadcast("message_deleted", map[string]any{
-				"accountId": acct,
-				"chatJid":   msg.Info.Chat.ToNonAD().String(),
-				"msgId":     targetID,
-			})
-		}
+	canonicalChat := resolveCanonicalChatJID(
+		client,
+		msg.Info.Chat,
+		msg.Info.SenderAlt,
+		msg.Info.RecipientAlt,
+		msg.Info.IsGroup,
+		msg.Info.IsFromMe,
+		nil,
+	)
+	rawChatStr := msg.Info.Chat.ToNonAD().String()
+	chatJIDStr := canonicalChat.String()
+	if rawChatStr != chatJIDStr {
+		h.maybeMergeLID(acct, rawChatStr, chatJIDStr)
+	}
+
+	core := utils.UnwrapMessage(msg.Message)
+	if core == nil {
 		return
 	}
 
-	// Ignore pure protocol/reaction noise without user content.
-	if core.ProtocolMessage != nil || core.ReactionMessage != nil || core.SenderKeyDistributionMessage != nil {
-		return
+	// Handle revocations and edits BEFORE content classification.
+	if pm := core.GetProtocolMessage(); pm != nil {
+		switch pm.GetType() {
+		case waE2E.ProtocolMessage_REVOKE:
+			targetID := pm.GetKey().GetID()
+			if targetID == "" {
+				targetID = msg.Info.MsgMetaInfo.TargetID
+			}
+			if targetID != "" {
+				h.store.MarkDeleted(acct, targetID)
+				h.store.Flush()
+				h.Broadcast("message_deleted", map[string]any{
+					"accountId": acct,
+					"chatJid":   chatJIDStr,
+					"msgId":     targetID,
+				})
+			}
+			return
+
+		case waE2E.ProtocolMessage_MESSAGE_EDIT:
+			targetID := pm.GetKey().GetID()
+			if targetID == "" {
+				targetID = msg.Info.MsgMetaInfo.TargetID
+			}
+			if editedCore := utils.UnwrapMessage(pm.GetEditedMessage()); editedCore != nil && targetID != "" {
+				_, newBody, newCaption, _ := classifyMessageForWeb(editedCore)
+				if strings.TrimSpace(newBody) != "" || strings.TrimSpace(newCaption) != "" {
+					h.store.UpdateMessageBody(acct, targetID, newBody, newCaption)
+					h.store.Flush()
+					h.Broadcast("message_edited", map[string]any{
+						"accountId": acct,
+						"chatJid":   chatJIDStr,
+						"msgId":     targetID,
+						"body":      newBody,
+						"caption":   newCaption,
+					})
+				}
+			}
+			return
+		}
 	}
 
+	// Classify actual content FIRST — do NOT reject messages merely because
+	// SenderKeyDistributionMessage or ProtocolMessage is bundled alongside real
+	// group/DM content (WhatsApp attaches SenderKeyDistributionMessage to normal
+	// group messages on first send and after every key rotation!).
 	msgType, body, caption, mimeType := classifyMessageForWeb(core)
 	if msgType == "text" && strings.TrimSpace(body) == "" {
 		return
@@ -327,7 +578,12 @@ func (h *Hub) IngestMessage(client *whatsmeow.Client, msg *events.Message) {
 	} else {
 		if saved := resolveContactName(client, msg.Info.Sender); saved != "" {
 			senderName = saved
-		} else if senderName == "" {
+		} else if msg.Info.SenderAlt.User != "" {
+			if saved := resolveContactName(client, msg.Info.SenderAlt); saved != "" {
+				senderName = saved
+			}
+		}
+		if senderName == "" {
 			senderName = utils.ResolvePhoneNumber(client, msg.Info.Sender, msg.Info.SenderAlt)
 		}
 	}
@@ -340,7 +596,7 @@ func (h *Hub) IngestMessage(client *whatsmeow.Client, msg *events.Message) {
 	stored := db.StoredMessage{
 		AccountID:   acct,
 		MsgID:       msg.Info.ID,
-		ChatJID:     msg.Info.Chat.ToNonAD().String(),
+		ChatJID:     chatJIDStr,
 		SenderJID:   msg.Info.Sender.ToNonAD().String(),
 		SenderName:  senderName,
 		IsFromMe:    msg.Info.IsFromMe,
@@ -350,11 +606,12 @@ func (h *Hub) IngestMessage(client *whatsmeow.Client, msg *events.Message) {
 		IsViewOnce:  isVO,
 		MediaMime:   mimeType,
 		Timestamp:   ts,
-		ChatName:    resolveWebChatName(client, msg.Info),
+		ChatName:    h.resolveWebChatName(client, msg.Info, canonicalChat),
 		ChatIsGroup: msg.Info.IsGroup,
 	}
 
 	h.store.RecordMessage(stored)
+	h.store.Flush()
 	h.Broadcast("message", stored)
 
 	// Automatically download and persist media (especially view-once & sound stickers)
@@ -402,6 +659,7 @@ func (h *Hub) captureMediaForWeb(client *whatsmeow.Client, acct, chatJID, msgID 
 	}
 
 	h.store.UpdateMediaPaths(acct, msgID, mediaRel, audioRel, mimeType)
+	h.store.Flush()
 	h.Broadcast("media_ready", map[string]any{
 		"accountId": acct,
 		"chatJid":   chatJID,
@@ -423,12 +681,45 @@ func (h *Hub) IngestHistorySync(client *whatsmeow.Client, evt *events.HistorySyn
 		return
 	}
 
+	// Index PhoneNumber <-> LID mappings and Pushnames included in this HistorySync chunk.
+	lidToPN := make(map[string]string, len(evt.Data.GetPhoneNumberToLidMappings()))
+	for _, m := range evt.Data.GetPhoneNumberToLidMappings() {
+		lid := strings.TrimSpace(m.GetLidJID())
+		pn := strings.TrimSpace(m.GetPnJID())
+		if lid != "" && pn != "" {
+			if !strings.Contains(pn, "@") {
+				pn += "@" + waTypes.DefaultUserServer
+			}
+			lidToPN[lid] = pn
+			if !strings.Contains(lid, "@") {
+				lidToPN[lid+"@"+waTypes.HiddenUserServer] = pn
+			} else {
+				lidToPN[strings.Split(lid, "@")[0]] = pn
+			}
+		}
+	}
+	pushNames := make(map[string]string, len(evt.Data.GetPushnames()))
+	for _, p := range evt.Data.GetPushnames() {
+		id := strings.TrimSpace(p.GetID())
+		name := strings.TrimSpace(p.GetPushname())
+		if id != "" && name != "" {
+			pushNames[id] = name
+		}
+	}
+
 	importedMsgs := 0
 	importedChats := 0
+	var syncedChatJIDs []string
+
 	for _, conv := range evt.Data.GetConversations() {
-		chatJIDStr := strings.TrimSpace(conv.GetID())
-		if chatJIDStr == "" || db.IsIgnoredWebChatJID(chatJIDStr) {
+		rawID := strings.TrimSpace(conv.GetID())
+		if rawID == "" || db.IsIgnoredWebChatJID(rawID) {
 			continue
+		}
+		chatJIDStr := rawID
+		lidAlias := strings.TrimSpace(conv.GetLidJID())
+		if strings.HasSuffix(strings.ToLower(rawID), "@lid") && lidAlias == "" {
+			lidAlias = rawID
 		}
 		// Prefer phone-number JID over duplicate LID thread when WhatsApp supplies PnJID.
 		if pn := strings.TrimSpace(conv.GetPnJID()); pn != "" && !db.IsIgnoredWebChatJID(pn) {
@@ -438,20 +729,34 @@ func (h *Hub) IngestHistorySync(client *whatsmeow.Client, evt *events.HistorySyn
 		if err != nil || chatJID.Server == waTypes.BroadcastServer || chatJID.Server == waTypes.NewsletterServer {
 			continue
 		}
-		normJID := chatJID.ToNonAD().String()
 		isGroup := chatJID.Server == waTypes.GroupServer
+		canonicalChat := resolveCanonicalChatJID(client, chatJID, waTypes.EmptyJID, waTypes.EmptyJID, isGroup, false, lidToPN)
+		normJID := canonicalChat.String()
+
+		if lidAlias != "" {
+			if parsedLID, lErr := waTypes.ParseJID(lidAlias); lErr == nil {
+				lidNorm := parsedLID.ToNonAD().String()
+				if lidNorm != normJID {
+					h.maybeMergeLID(acct, lidNorm, normJID)
+				}
+			}
+		}
 
 		chatName := strings.TrimSpace(conv.GetName())
 		if chatName == "" {
 			chatName = strings.TrimSpace(conv.GetDisplayName())
 		}
-		if !isGroup && (chatName == "" || chatName == chatJID.ToNonAD().User) {
-			if saved := resolveContactName(client, chatJID); saved != "" {
+		if !isGroup && (chatName == "" || chatName == canonicalChat.User) {
+			if saved := resolveContactName(client, canonicalChat); saved != "" {
 				chatName = saved
+			} else if pnName := pushNames[normJID]; pnName != "" {
+				chatName = pnName
+			} else if lidAlias != "" && pushNames[lidAlias] != "" {
+				chatName = pushNames[lidAlias]
 			}
 		}
 		if chatName == "" {
-			chatName = chatJID.ToNonAD().User
+			chatName = canonicalChat.User
 		}
 
 		convTS := int64(conv.GetConversationTimestamp())
@@ -469,6 +774,7 @@ func (h *Hub) IngestHistorySync(client *whatsmeow.Client, evt *events.HistorySyn
 			UnreadCount:   int(conv.GetUnreadCount()),
 		})
 		importedChats++
+		syncedChatJIDs = append(syncedChatJIDs, normJID)
 
 		for _, histMsg := range conv.GetMessages() {
 			webMsg := histMsg.GetMessage()
@@ -481,9 +787,29 @@ func (h *Hub) IngestHistorySync(client *whatsmeow.Client, evt *events.HistorySyn
 			}
 			raw := webMsg.GetMessage()
 			core := utils.UnwrapMessage(raw)
-			if core == nil || core.ProtocolMessage != nil || core.ReactionMessage != nil {
+			if core == nil {
 				continue
 			}
+			if pm := core.GetProtocolMessage(); pm != nil {
+				if pm.GetType() == waE2E.ProtocolMessage_REVOKE {
+					if targetID := pm.GetKey().GetID(); targetID != "" {
+						h.store.MarkDeleted(acct, targetID)
+					}
+					continue
+				}
+				if pm.GetType() == waE2E.ProtocolMessage_MESSAGE_EDIT {
+					if targetID := pm.GetKey().GetID(); targetID != "" {
+						if editedCore := utils.UnwrapMessage(pm.GetEditedMessage()); editedCore != nil {
+							_, nb, nc, _ := classifyMessageForWeb(editedCore)
+							if strings.TrimSpace(nb) != "" || strings.TrimSpace(nc) != "" {
+								h.store.UpdateMessageBody(acct, targetID, nb, nc)
+							}
+						}
+					}
+					continue
+				}
+			}
+
 			msgType, body, caption, mimeType := classifyMessageForWeb(core)
 			if msgType == "text" && strings.TrimSpace(body) == "" {
 				continue
@@ -491,43 +817,184 @@ func (h *Hub) IngestHistorySync(client *whatsmeow.Client, evt *events.HistorySyn
 
 			senderJID := key.GetParticipant()
 			if senderJID == "" {
+				senderJID = webMsg.GetParticipant()
+			}
+			if senderJID == "" {
 				senderJID = normJID
 			}
 			senderName := strings.TrimSpace(webMsg.GetPushName())
 			if key.GetFromMe() {
 				senderName = "You"
 			} else if senderName == "" {
-				senderName = chatName
+				if pn := pushNames[senderJID]; pn != "" {
+					senderName = pn
+				} else {
+					senderName = chatName
+				}
 			}
 
 			h.store.RecordMessage(db.StoredMessage{
-				AccountID:   acct,
-				MsgID:       key.GetID(),
-				ChatJID:     normJID,
-				SenderJID:   senderJID,
-				SenderName:  senderName,
-				IsFromMe:    key.GetFromMe(),
-				MsgType:     msgType,
-				Body:        body,
-				Caption:     caption,
-				IsViewOnce:  utils.IsViewOnceMessage(nil, raw),
-				MediaMime:   mimeType,
-				Timestamp:   int64(webMsg.GetMessageTimestamp()),
-				ChatName:    chatName,
-				ChatIsGroup: isGroup,
+				AccountID:           acct,
+				MsgID:               key.GetID(),
+				ChatJID:             normJID,
+				SenderJID:           senderJID,
+				SenderName:          senderName,
+				IsFromMe:            key.GetFromMe(),
+				MsgType:             msgType,
+				Body:                body,
+				Caption:             caption,
+				IsViewOnce:          utils.IsViewOnceMessage(nil, raw),
+				MediaMime:           mimeType,
+				Timestamp:           int64(webMsg.GetMessageTimestamp()),
+				ChatName:            chatName,
+				ChatIsGroup:         isGroup,
+				SkipUnreadIncrement: true,
 			})
 			importedMsgs++
 		}
 	}
 
 	if importedChats > 0 || importedMsgs > 0 {
-		fmt.Printf("📥 [WEBCHAT] Imported %d chats & %d historical messages into sequential SQLite for %s\n", importedChats, importedMsgs, acct)
+		h.store.Flush()
+		fmt.Printf("📥 [WEBCHAT] Imported %d chats & %d historical messages (%s) into sequential SQLite for %s\n",
+			importedChats, importedMsgs, evt.Data.GetSyncType().String(), acct)
+		h.Broadcast("history_synced", map[string]any{
+			"accountId": acct,
+			"chats":     syncedChatJIDs,
+			"count":     importedMsgs,
+		})
 		h.Broadcast("accounts_updated", nil)
 	}
 }
 
+// HandleOfflineSyncCompleted flushes buffered offline messages and nudges open
+// browser tabs to refresh so messages received during reconnect appear immediately.
+func (h *Hub) HandleOfflineSyncCompleted(client *whatsmeow.Client) {
+	if h == nil || h.store == nil {
+		return
+	}
+	acct := accountKey(client)
+	if acct == "" {
+		return
+	}
+	h.store.Flush()
+	h.Broadcast("history_synced", map[string]any{
+		"accountId": acct,
+	})
+}
+
+// HandleJoinedGroup immediately adds newly joined groups to the chat list.
+func (h *Hub) HandleJoinedGroup(client *whatsmeow.Client, evt *events.JoinedGroup) {
+	if h == nil || h.store == nil || evt == nil || evt.JID.IsEmpty() {
+		return
+	}
+	acct := accountKey(client)
+	if acct == "" {
+		return
+	}
+	jidStr := evt.JID.ToNonAD().String()
+	name := strings.TrimSpace(evt.Name)
+	h.cacheGroupName(jidStr, name)
+	h.store.UpsertChat(db.StoredChat{
+		AccountID:     acct,
+		ChatJID:       jidStr,
+		Name:          name,
+		IsGroup:       true,
+		LastTimestamp: time.Now().Unix(),
+	})
+	h.store.Flush()
+	h.Broadcast("accounts_updated", nil)
+}
+
+// HandleMarkChatAsRead syncs read-state changes made on the user's phone.
+func (h *Hub) HandleMarkChatAsRead(client *whatsmeow.Client, evt *events.MarkChatAsRead) {
+	if h == nil || h.store == nil || evt == nil || evt.Action == nil || !evt.Action.GetRead() {
+		return
+	}
+	acct := accountKey(client)
+	if acct == "" {
+		return
+	}
+	canonical := resolveCanonicalChatJID(client, evt.JID, waTypes.EmptyJID, waTypes.EmptyJID, evt.JID.Server == waTypes.GroupServer, false, nil)
+	h.store.MarkChatRead(acct, canonical.String())
+	if canonical.String() != evt.JID.ToNonAD().String() {
+		h.store.MarkChatRead(acct, evt.JID.ToNonAD().String())
+	}
+}
+
+// HandleContactUpdate refreshes contact & DM chat names as PushName/Contact events arrive.
+func (h *Hub) HandleContactUpdate(client *whatsmeow.Client, jid waTypes.JID, fullName, pushName string) {
+	if h == nil || h.store == nil || jid.IsEmpty() {
+		return
+	}
+	acct := accountKey(client)
+	if acct == "" {
+		return
+	}
+	if jid.Server == waTypes.NewsletterServer || jid.Server == waTypes.BroadcastServer || jid.Server == waTypes.GroupServer {
+		return
+	}
+	canonical := resolveCanonicalChatJID(client, jid, waTypes.EmptyJID, waTypes.EmptyJID, false, false, nil)
+	if db.IsIgnoredWebChatJID(canonical.String()) {
+		return
+	}
+	name := strings.TrimSpace(fullName)
+	if name == "" {
+		name = strings.TrimSpace(pushName)
+	}
+	if name == "" {
+		return
+	}
+	h.store.UpsertContact(db.StoredContact{
+		AccountID: acct,
+		JID:       canonical.String(),
+		Phone:     canonical.User,
+		Name:      name,
+		FullName:  strings.TrimSpace(fullName),
+		PushName:  strings.TrimSpace(pushName),
+		UpdatedAt: time.Now().Unix(),
+	})
+}
+
+// RequestChatHistory sends an ON_DEMAND history sync request to the user's
+// primary phone for older messages in chatJID (returned asynchronously via *events.HistorySync).
+func (h *Hub) RequestChatHistory(ctx context.Context, client *whatsmeow.Client, acct, chatJIDStr string, count int) error {
+	if h == nil || h.store == nil || client == nil || !client.IsConnected() {
+		return fmt.Errorf("WhatsApp account is not connected")
+	}
+	if count <= 0 || count > 100 {
+		count = 50
+	}
+	oldest, err := h.store.GetOldestMessage(acct, chatJIDStr)
+	if err != nil || oldest == nil {
+		return fmt.Errorf("no existing anchor message in this chat yet")
+	}
+	parsedChat, err := waTypes.ParseJID(chatJIDStr)
+	if err != nil {
+		return fmt.Errorf("invalid chat JID: %w", err)
+	}
+	senderJID, _ := waTypes.ParseJID(oldest.SenderJID)
+	if senderJID.IsEmpty() {
+		senderJID = parsedChat
+	}
+	info := &waTypes.MessageInfo{
+		MessageSource: waTypes.MessageSource{
+			Chat:     parsedChat.ToNonAD(),
+			Sender:   senderJID.ToNonAD(),
+			IsFromMe: oldest.IsFromMe,
+			IsGroup:  parsedChat.Server == waTypes.GroupServer,
+		},
+		ID:        oldest.MsgID,
+		Timestamp: time.Unix(oldest.Timestamp, 0),
+	}
+	reqMsg := client.BuildHistorySyncRequest(info, count)
+	_, err = client.SendPeerMessage(ctx, reqMsg)
+	return err
+}
+
 // SyncAccount pulls all contacts and all joined groups from WhatsApp into the
-// sequential ChatStore, purges any legacy @newsletter/@broadcast rows, and
+// sequential ChatStore, merges any split @lid chats into their canonical
+// @s.whatsapp.net threads, purges any legacy @newsletter/@broadcast rows, and
 // refreshes contact/group names across all chats.
 func (h *Hub) SyncAccount(client *whatsmeow.Client) (contactsCount, groupsCount int) {
 	if h == nil || h.store == nil || client == nil || client.Store == nil {
@@ -540,6 +1007,28 @@ func (h *Hub) SyncAccount(client *whatsmeow.Client) (contactsCount, groupsCount 
 
 	h.store.PurgeIgnoredChats()
 
+	// 0. Merge any previously split @lid chats into their canonical @s.whatsapp.net JIDs.
+	if lidJIDs, err := h.store.ListLIDChatJIDs(acct); err == nil {
+		merged := 0
+		for _, rawLID := range lidJIDs {
+			parsed, pErr := waTypes.ParseJID(rawLID)
+			if pErr != nil {
+				continue
+			}
+			canonical := resolveCanonicalChatJID(client, parsed, waTypes.EmptyJID, waTypes.EmptyJID, false, false, nil)
+			if canonical.String() != rawLID && canonical.Server == waTypes.DefaultUserServer {
+				h.store.MergeChatJID(acct, rawLID, canonical.String())
+				h.lidMu.Lock()
+				h.mergedLIDs[acct+"|"+rawLID] = canonical.String()
+				h.lidMu.Unlock()
+				merged++
+			}
+		}
+		if merged > 0 {
+			fmt.Printf("🔗 [WEBCHAT] Merged %d split @lid chats into canonical phone threads for %s\n", merged, acct)
+		}
+	}
+
 	// 1. Sync all contacts from whatsmeow's ContactStore.
 	if client.Store.Contacts != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -551,15 +1040,16 @@ func (h *Hub) SyncAccount(client *whatsmeow.Client) (contactsCount, groupsCount 
 				if jid.Server == waTypes.NewsletterServer || jid.Server == waTypes.BroadcastServer || jid.Server == waTypes.GroupServer {
 					continue
 				}
-				jidStr := jid.ToNonAD().String()
+				canonical := resolveCanonicalChatJID(client, jid, waTypes.EmptyJID, waTypes.EmptyJID, false, false, nil)
+				jidStr := canonical.String()
 				if db.IsIgnoredWebChatJID(jidStr) {
 					continue
 				}
-				display := contactDisplayName(info, jid.ToNonAD().User)
+				display := contactDisplayName(info, canonical.User)
 				h.store.UpsertContact(db.StoredContact{
 					AccountID:    acct,
 					JID:          jidStr,
-					Phone:        jid.ToNonAD().User,
+					Phone:        canonical.User,
 					Name:         display,
 					FullName:     strings.TrimSpace(info.FullName),
 					PushName:     strings.TrimSpace(info.PushName),
@@ -581,10 +1071,13 @@ func (h *Hub) SyncAccount(client *whatsmeow.Client) (contactsCount, groupsCount 
 				if g == nil || g.JID.IsEmpty() || g.JID.Server != waTypes.GroupServer {
 					continue
 				}
+				jidStr := g.JID.ToNonAD().String()
+				name := strings.TrimSpace(g.Name)
+				h.cacheGroupName(jidStr, name)
 				h.store.UpsertChat(db.StoredChat{
 					AccountID: acct,
-					ChatJID:   g.JID.ToNonAD().String(),
-					Name:      strings.TrimSpace(g.Name),
+					ChatJID:   jidStr,
+					Name:      name,
 					IsGroup:   true,
 				})
 				groupsCount++

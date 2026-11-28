@@ -42,6 +42,24 @@ func UnwrapMessage(msg *waE2E.Message) *waE2E.Message {
 			msg = msg.GetGroupMentionedMessage().GetMessage()
 		case msg.GetEditedMessage().GetMessage() != nil:
 			msg = msg.GetEditedMessage().GetMessage()
+		case msg.GetAssociatedChildMessage().GetMessage() != nil:
+			msg = msg.GetAssociatedChildMessage().GetMessage()
+		case msg.GetSpoilerMessage().GetMessage() != nil:
+			msg = msg.GetSpoilerMessage().GetMessage()
+		case msg.GetGroupStatusMentionMessage().GetMessage() != nil:
+			msg = msg.GetGroupStatusMentionMessage().GetMessage()
+		case msg.GetStatusMentionMessage().GetMessage() != nil:
+			msg = msg.GetStatusMentionMessage().GetMessage()
+		case msg.GetBotForwardedMessage().GetMessage() != nil:
+			msg = msg.GetBotForwardedMessage().GetMessage()
+		case msg.GetQuestionMessage().GetMessage() != nil:
+			msg = msg.GetQuestionMessage().GetMessage()
+		case msg.GetQuestionReplyMessage().GetMessage() != nil:
+			msg = msg.GetQuestionReplyMessage().GetMessage()
+		case msg.GetLimitSharingMessage().GetMessage() != nil:
+			msg = msg.GetLimitSharingMessage().GetMessage()
+		case msg.GetPollCreationMessageV4().GetMessage() != nil:
+			msg = msg.GetPollCreationMessageV4().GetMessage()
 		default:
 			return msg
 		}
@@ -131,8 +149,12 @@ func directMediaMessage(msg *waE2E.Message) whatsmeow.DownloadableMessage {
 	switch {
 	case core.ImageMessage != nil:
 		return core.ImageMessage
+	case core.InstantImageMessage != nil:
+		return core.InstantImageMessage
 	case core.VideoMessage != nil:
 		return core.VideoMessage
+	case core.PtvMessage != nil:
+		return core.PtvMessage
 	case core.AudioMessage != nil:
 		return core.AudioMessage
 	case core.DocumentMessage != nil:
@@ -171,8 +193,12 @@ func HasDownloadableMedia(msg *waE2E.Message) bool {
 	switch {
 	case core.ImageMessage != nil:
 		return core.ImageMessage.GetURL() != "" || core.ImageMessage.GetDirectPath() != ""
+	case core.InstantImageMessage != nil:
+		return core.InstantImageMessage.GetURL() != "" || core.InstantImageMessage.GetDirectPath() != ""
 	case core.VideoMessage != nil:
 		return core.VideoMessage.GetURL() != "" || core.VideoMessage.GetDirectPath() != ""
+	case core.PtvMessage != nil:
+		return core.PtvMessage.GetURL() != "" || core.PtvMessage.GetDirectPath() != ""
 	case core.AudioMessage != nil:
 		return core.AudioMessage.GetURL() != "" || core.AudioMessage.GetDirectPath() != ""
 	case core.DocumentMessage != nil:
@@ -193,8 +219,12 @@ func MediaFileLength(msg *waE2E.Message) uint64 {
 	switch {
 	case core.ImageMessage != nil:
 		return core.ImageMessage.GetFileLength()
+	case core.InstantImageMessage != nil:
+		return core.InstantImageMessage.GetFileLength()
 	case core.VideoMessage != nil:
 		return core.VideoMessage.GetFileLength()
+	case core.PtvMessage != nil:
+		return core.PtvMessage.GetFileLength()
 	case core.AudioMessage != nil:
 		return core.AudioMessage.GetFileLength()
 	case core.DocumentMessage != nil:
@@ -215,8 +245,12 @@ func MediaCaption(msg *waE2E.Message) string {
 	switch {
 	case core.ImageMessage != nil:
 		return core.ImageMessage.GetCaption()
+	case core.InstantImageMessage != nil:
+		return core.InstantImageMessage.GetCaption()
 	case core.VideoMessage != nil:
 		return core.VideoMessage.GetCaption()
+	case core.PtvMessage != nil:
+		return core.PtvMessage.GetCaption()
 	case core.DocumentMessage != nil:
 		return core.DocumentMessage.GetCaption()
 	default:
@@ -232,9 +266,9 @@ func MediaTypeForMessage(msg *waE2E.Message) (whatsmeow.MediaType, bool) {
 		return "", false
 	}
 	switch {
-	case core.ImageMessage != nil, core.StickerMessage != nil:
+	case core.ImageMessage != nil, core.InstantImageMessage != nil, core.StickerMessage != nil:
 		return whatsmeow.MediaImage, true
-	case core.VideoMessage != nil:
+	case core.VideoMessage != nil, core.PtvMessage != nil:
 		return whatsmeow.MediaVideo, true
 	case core.AudioMessage != nil:
 		return whatsmeow.MediaAudio, true

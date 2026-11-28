@@ -173,6 +173,16 @@ func configureAndroidCompanion() {
 		store.DeviceProps.Os = proto.String("Android")
 		store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_ANDROID_PHONE.Enum()
 		store.DeviceProps.RequireFullSync = proto.Bool(true)
+		store.DeviceProps.HistorySyncConfig = &waCompanionReg.DeviceProps_HistorySyncConfig{
+			FullSyncDaysLimit:             proto.Uint32(365),
+			FullSyncSizeMbLimit:           proto.Uint32(1024),
+			StorageQuotaMb:                proto.Uint32(1024),
+			InlineInitialPayloadInE2EeMsg: proto.Bool(true),
+			OnDemandReady:                 proto.Bool(true),
+			SupportGroupHistory:           proto.Bool(true),
+			SupportInlineContacts:         proto.Bool(true),
+			SupportCagReactionsAndPolls:   proto.Bool(true),
+		}
 		store.DeviceProps.Version = &waCompanionReg.DeviceProps_AppVersion{
 			Primary:    proto.Uint32(2),
 			Secondary:  proto.Uint32(24),
@@ -218,6 +228,30 @@ func attachClientHandlers(client *whatsmeow.Client) {
 		case *events.HistorySync:
 			if webHub != nil {
 				webHub.IngestHistorySync(client, v)
+			}
+		case *events.OfflineSyncCompleted:
+			if webHub != nil {
+				webHub.HandleOfflineSyncCompleted(client)
+			}
+		case *events.JoinedGroup:
+			if webHub != nil {
+				webHub.HandleJoinedGroup(client, v)
+			}
+		case *events.MarkChatAsRead:
+			if webHub != nil {
+				webHub.HandleMarkChatAsRead(client, v)
+			}
+		case *events.Contact:
+			if webHub != nil && v.Action != nil {
+				webHub.HandleContactUpdate(client, v.JID, v.Action.GetFullName(), v.Action.GetFirstName())
+			}
+		case *events.PushName:
+			if webHub != nil && strings.TrimSpace(v.NewPushName) != "" {
+				jid := v.JID
+				if v.JIDAlt.User != "" && v.JIDAlt.Server == "s.whatsapp.net" {
+					jid = v.JIDAlt
+				}
+				webHub.HandleContactUpdate(client, jid, "", v.NewPushName)
 			}
 		case *events.GroupInfo:
 			handlers.HandleGroupParticipant(client, v)
