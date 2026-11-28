@@ -105,13 +105,21 @@ func SetStartTime(t time.Time) {
 	botStartTime = t
 }
 
-// RegisterCommand adds a new command (and any lowercase aliases) to the registry.
+// RegisterCommand adds a new command (and any lowercase aliases) to the registry,
+// normalizing its category into one of the 9 canonical groups and ensuring all
+// owner-only commands live under the hidden "owner" category.
 func RegisterCommand(cmd types.Command) {
 	name := strings.ToLower(strings.TrimSpace(cmd.Name))
 	if name == "" {
 		return
 	}
 	cmd.Name = name
+	cmd.Category = i18n.NormalizeCategory(cmd.Category)
+	if cmd.OwnerOnly || cmd.Category == i18n.CatOwner {
+		cmd.Category = i18n.CatOwner
+		cmd.OwnerOnly = true
+	}
+	cmd.Description = i18n.CommandDescription(i18n.LangEN, cmd.Name, cmd.Description)
 	Commands[name] = cmd
 	PrimaryCommands[name] = cmd
 	for _, alias := range cmd.Aliases {
@@ -292,7 +300,7 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 	if strings.HasPrefix(text, "->") {
 		if cmd, ok := Commands["eval"]; ok {
 			if !isOwner {
-				utils.SendReply(client, jid, "⛔ Access Denied: This command is restricted to the bot owner.")
+				utils.SendReply(client, jid, i18n.TMsg(client, msg, "err.owner_only"))
 				return
 			}
 			argsString := strings.TrimSpace(strings.TrimPrefix(text, "->"))
@@ -326,7 +334,7 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 	}
 
 	// Owner check
-	if (cmd.Category == "owner" || cmd.OwnerOnly) && !isOwner {
+	if (cmd.Category == i18n.CatOwner || cmd.OwnerOnly) && !isOwner {
 		if cmd.Name == "jadibot" {
 			utils.SendReply(client, jid, i18n.TMsg(client, msg, "err.jadibot_locked"))
 		} else {
@@ -391,13 +399,13 @@ func HandleCommand(client *whatsmeow.Client, msg *events.Message) {
 				if gcfg.AdminOnly && !senderAdmin {
 					return
 				}
-				if gcfg.DisabledCategories[cmd.Category] || gcfg.DisabledCommands[cmd.Name] {
+				if isCategoryDisabled(gcfg.DisabledCategories, cmd.Category) || gcfg.DisabledCommands[cmd.Name] {
 					return
 				}
 			}
 			// Legacy JSON group settings compatibility
 			if legacySettings, err := db.LoadGroupSettings(jid.String()); err == nil && legacySettings != nil {
-				if legacySettings.DisabledCategories[cmd.Category] || legacySettings.DisabledCommands[cmd.Name] {
+				if isCategoryDisabled(legacySettings.DisabledCategories, cmd.Category) || legacySettings.DisabledCommands[cmd.Name] {
 					return
 				}
 			}
@@ -518,6 +526,23 @@ func GenerateHelpMenu(conf *config.Config, categories map[string][]string, reque
 	categoryMenu := replacer.Replace(conf.HelpMenuTemplate.CategoryMenu)
 	builder.WriteString(categoryMenu)
 	return builder.String(), nil
+}
+
+// isCategoryDisabled checks whether a canonical category is disabled in a group
+// map (including backwards compatibility for legacy category keys).
+func isCategoryDisabled(disabled map[string]bool, canonicalCat string) bool {
+	if len(disabled) == 0 {
+		return false
+	}
+	if disabled[canonicalCat] {
+		return true
+	}
+	for k, v := range disabled {
+		if v && i18n.NormalizeCategory(k) == canonicalCat {
+			return true
+		}
+	}
+	return false
 }
 
 // Title capitalizes the first letter of a string.

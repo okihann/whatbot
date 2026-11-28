@@ -22,14 +22,9 @@ import (
 func init() {
 	handlers.RegisterCommand(types.Command{
 		Name:        "tiktok",
-		Description: "Downloads a video or photo slideshow from a TikTok link.",
-		Category:    "downloader",
-		Execute:     executeTiktok,
-	})
-	handlers.RegisterCommand(types.Command{
-		Name:        "tt",
-		Description: "Alias for /tiktok.",
-		Category:    "downloader",
+		Aliases:     []string{"tt"},
+		Description: "Download TikTok videos or photo slideshows without watermark.",
+		Category:    "media",
 		Execute:     executeTiktok,
 	})
 }

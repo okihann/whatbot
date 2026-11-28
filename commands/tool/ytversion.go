@@ -15,8 +15,9 @@ import (
 func init() {
 	handlers.RegisterCommand(types.Command{
 		Name:        "ytversion",
-		Description: "Checks the embedded version of yt-dlp. (Owner only)",
+		Description: "Check the embedded yt-dlp version.",
 		Category:    "owner",
+		OwnerOnly:   true,
 		Execute:     executeYtVersion,
 	})
 }

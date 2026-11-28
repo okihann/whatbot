@@ -117,33 +117,33 @@ func init() {
 
 	cmds := []types.Command{
 		// Trivia & word games
-		{Name: "asahotak", Category: "game", Description: "Play Asah Otak riddle game.", Execute: cmdRiddleGame("asahotak", bankAsahOtak, 25)},
-		{Name: "caklontong", Category: "game", Description: "Play Cak Lontong pun trivia.", Execute: cmdRiddleGame("caklontong", bankCakLontong, 25)},
-		{Name: "siapakahaku", Category: "game", Description: "Play Siapakah Aku guessing game.", Execute: cmdRiddleGame("siapakahaku", bankSiapakahAku, 25)},
-		{Name: "tebakbendera", Category: "game", Description: "Guess the country from its flag.", Execute: cmdRiddleGame("tebakbendera", bankTebakBendera, 20)},
-		{Name: "tebakibukota", Category: "game", Description: "Guess the capital city.", Execute: cmdRiddleGame("tebakibukota", bankTebakIbukota, 20)},
-		{Name: "tebaklirik", Category: "game", Description: "Complete the song lyrics.", Execute: cmdRiddleGame("tebaklirik", bankTebakLirik, 20)},
-		{Name: "tebakgambar", Category: "game", Description: "Guess the word from emoji rebus clues.", Execute: cmdRiddleGame("tebakgambar", bankTebakGambar, 25)},
-		{Name: "tebakkata", Aliases: []string{"susunkata"}, Category: "game", Description: "Unscramble the shuffled word.", Execute: cmdSusunKata},
-		{Name: "sambungkata", Category: "game", Description: "Play word chain (Sambung Kata) in chat.", Execute: cmdSambungKata},
-		{Name: "math", Category: "game", Description: "Timed mental math challenge.", Execute: cmdMathGame},
-		{Name: "wordle", Category: "game", Description: "Play 5-letter Wordle in WhatsApp chat.", Execute: cmdWordle},
+		{Name: "asahotak", Category: "games", Description: "Play Asah Otak riddle game.", Execute: cmdRiddleGame("asahotak", bankAsahOtak, 25)},
+		{Name: "caklontong", Category: "games", Description: "Play Cak Lontong pun trivia.", Execute: cmdRiddleGame("caklontong", bankCakLontong, 25)},
+		{Name: "siapakahaku", Category: "games", Description: "Play Siapakah Aku guessing game.", Execute: cmdRiddleGame("siapakahaku", bankSiapakahAku, 25)},
+		{Name: "tebakbendera", Category: "games", Description: "Guess the country from its flag.", Execute: cmdRiddleGame("tebakbendera", bankTebakBendera, 20)},
+		{Name: "tebakibukota", Category: "games", Description: "Guess the capital city.", Execute: cmdRiddleGame("tebakibukota", bankTebakIbukota, 20)},
+		{Name: "tebaklirik", Category: "games", Description: "Complete the song lyrics.", Execute: cmdRiddleGame("tebaklirik", bankTebakLirik, 20)},
+		{Name: "tebakgambar", Category: "games", Description: "Guess the word from emoji rebus clues.", Execute: cmdRiddleGame("tebakgambar", bankTebakGambar, 25)},
+		{Name: "tebakkata", Aliases: []string{"susunkata"}, Category: "games", Description: "Unscramble the shuffled word.", Execute: cmdSusunKata},
+		{Name: "sambungkata", Category: "games", Description: "Play word chain (Sambung Kata) in chat.", Execute: cmdSambungKata},
+		{Name: "math", Category: "games", Description: "Timed mental math challenge.", Execute: cmdMathGame},
+		{Name: "wordle", Category: "games", Description: "Play 5-letter Wordle in WhatsApp chat.", Execute: cmdWordle},
 
 		// Board & party games
-		{Name: "tebakbom", Category: "game", Description: "Avoid the hidden bomb on a 3x3 grid!", Execute: cmdTebakBom},
-		{Name: "tictactoe", Aliases: []string{"ttt"}, Category: "game", Description: "Play Tic-Tac-Toe vs Bot (or PvP). Reply 1-9 to move.", Execute: cmdTicTacToe},
-		{Name: "catur", Aliases: []string{"chess"}, Category: "game", Description: "Play Chess with rendered PNG board! Move using e2e4 format.", Execute: cmdChess},
-		{Name: "ulartangga", Category: "game", Description: "Play Snakes & Ladders! Type `roll` to move.", Execute: cmdUlarTangga},
-		{Name: "russianroulette", Category: "game", Description: "1-in-6 chance Russian Roulette!", Execute: cmdRussianRoulette},
+		{Name: "tebakbom", Category: "games", Description: "Avoid the hidden bomb on a 3x3 grid!", Execute: cmdTebakBom},
+		{Name: "tictactoe", Aliases: []string{"ttt"}, Category: "games", Description: "Play Tic-Tac-Toe vs Bot (or PvP). Reply 1-9 to move.", Execute: cmdTicTacToe},
+		{Name: "catur", Aliases: []string{"chess"}, Category: "games", Description: "Play Chess with rendered PNG board! Move using e2e4 format.", Execute: cmdChess},
+		{Name: "ulartangga", Category: "games", Description: "Play Snakes & Ladders! Type `roll` to move.", Execute: cmdUlarTangga},
+		{Name: "russianroulette", Category: "games", Description: "1-in-6 chance Russian Roulette!", Execute: cmdRussianRoulette},
 
 		// Stats, Badges & Leaderboards
-		{Name: "gamestats", Aliases: []string{"profilegame"}, Category: "game", Description: "View your game wins, points, and win streaks.", Execute: cmdGameStats},
-		{Name: "leaderboard", Category: "game", Description: "View this group's (or global) game leaderboard.", Execute: cmdLeaderboard(false)},
-		{Name: "globalleaderboard", Category: "game", Description: "View global game leaderboard across all chats.", Execute: cmdLeaderboard(true)},
-		{Name: "badges", Aliases: []string{"groupachievements"}, Category: "game", Description: "View unlocked game badges and achievements.", Execute: cmdBadges},
-		{Name: "groupstats", Aliases: []string{"groupmvp", "groupcarry", "groupcontrib", "groupcompare"}, Category: "game", Description: "View group MVP, top contributor, and group game comparison.", Execute: cmdGroupGameStats},
-		{Name: "rival", Category: "game", Description: "Compare your game score against a mentioned rival.", Execute: cmdRival},
-		{Name: "gamelimit", Category: "game", Description: "Show game session limits (unlimited on self-hosted NopeBot).", Execute: cmdGameLimit},
+		{Name: "gamestats", Aliases: []string{"profilegame"}, Category: "games", Description: "View your game wins, points, and win streaks.", Execute: cmdGameStats},
+		{Name: "leaderboard", Category: "games", Description: "View this group's (or global) game leaderboard.", Execute: cmdLeaderboard(false)},
+		{Name: "globalleaderboard", Category: "games", Description: "View global game leaderboard across all chats.", Execute: cmdLeaderboard(true)},
+		{Name: "badges", Aliases: []string{"groupachievements"}, Category: "games", Description: "View unlocked game badges and achievements.", Execute: cmdBadges},
+		{Name: "groupstats", Aliases: []string{"groupmvp", "groupcarry", "groupcontrib", "groupcompare"}, Category: "games", Description: "View group MVP, top contributor, and group game comparison.", Execute: cmdGroupGameStats},
+		{Name: "rival", Category: "games", Description: "Compare your game score against a mentioned rival.", Execute: cmdRival},
+		{Name: "gamelimit", Category: "games", Description: "Show game session limits (unlimited on self-hosted NopeBot).", Execute: cmdGameLimit},
 	}
 	for _, c := range cmds {
 		handlers.RegisterCommand(c)

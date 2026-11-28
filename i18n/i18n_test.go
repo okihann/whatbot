@@ -22,3 +22,43 @@ func TestBilingualTranslations(t *testing.T) {
 		t.Fatalf("expected fallback to default lang, got %q", got)
 	}
 }
+
+func TestCategoryNormalizationAndBilingualCatalog(t *testing.T) {
+	cases := map[string]string{
+		"main":           CatGeneral,
+		"profile":        CatGeneral,
+		"confess":        CatGeneral,
+		"downloader":     CatMedia,
+		"youtube":        CatMedia,
+		"music":          CatMedia,
+		"sticker":        CatMedia,
+		"audiofx":        CatMedia,
+		"search":         CatTools,
+		"fun":            CatGames,
+		"game":           CatGames,
+		"minigame":       CatGames,
+		"animanga":       CatAnime,
+		"waifu":          CatAnime,
+		"group_admin":    CatGroup,
+		"group_security": CatGroup,
+		"bot":            CatOwner,
+		"pemilik":        CatOwner,
+		"unduhan":        CatMedia,
+		"alat":           CatTools,
+	}
+	for raw, want := range cases {
+		if got := NormalizeCategory(raw); got != want {
+			t.Errorf("NormalizeCategory(%q) = %q, want %q", raw, got, want)
+		}
+	}
+
+	if CategoryTitle(LangID, CatMedia) != "Unduhan & Media" || CategoryTitle(LangEN, CatMedia) != "Downloader & Media" {
+		t.Fatalf("unexpected localized category titles for media")
+	}
+
+	enDesc := CommandDescription(LangEN, "auto-get", "")
+	idDesc := CommandDescription(LangID, "auto-get", "")
+	if enDesc == "" || idDesc == "" || enDesc == idDesc {
+		t.Fatalf("expected distinct bilingual descriptions for auto-get, got en=%q id=%q", enDesc, idDesc)
+	}
+}

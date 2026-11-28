@@ -18,13 +18,8 @@ import (
 func init() {
 	handlers.RegisterCommand(types.Command{
 		Name:        "sticker",
-		Description: "Turns a photo, GIF, or short video into a WebP sticker (supports `crop` and `Pack | Author`).",
-		Category:    "media",
-		Execute:     executeSticker,
-	})
-	handlers.RegisterCommand(types.Command{
-		Name:        "s",
-		Description: "Alias for /sticker.",
+		Aliases:     []string{"s"},
+		Description: "Convert a photo, GIF, or short video into a WebP sticker.",
 		Category:    "media",
 		Execute:     executeSticker,
 	})

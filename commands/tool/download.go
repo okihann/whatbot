@@ -19,14 +19,9 @@ import (
 func init() {
 	handlers.RegisterCommand(types.Command{
 		Name:        "dl",
-		Description: "Downloads media from Instagram, X/Twitter, Reddit, Facebook, TikTok, Pinterest, YouTube, etc.",
-		Category:    "downloader",
-		Execute:     executeGenericDownload,
-	})
-	handlers.RegisterCommand(types.Command{
-		Name:        "download",
-		Description: "Alias for /dl.",
-		Category:    "downloader",
+		Aliases:     []string{"download"},
+		Description: "Download media from Instagram, TikTok, X, Facebook, Reddit, YouTube, etc.",
+		Category:    "media",
 		Execute:     executeGenericDownload,
 	})
 }

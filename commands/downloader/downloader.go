@@ -23,34 +23,34 @@ import (
 func init() {
 	cmds := []types.Command{
 		// Social / Video Downloaders (powered by yt-dlp + WhatsApp H.264 MP4 pipeline)
-		{Name: "downloader", Category: "downloader", Description: "Universal media downloader for TikTok, IG, FB, Twitter/X, YouTube, CapCut, etc.", Usage: ".downloader <url>", Execute: cmdGenericYtDlp("Media")},
-		{Name: "instagram", Aliases: []string{"ig"}, Category: "downloader", Description: "Download Instagram Reels/Posts.", Usage: ".instagram <url>", Execute: cmdGenericYtDlp("Instagram")},
-		{Name: "facebook", Aliases: []string{"fb"}, Category: "downloader", Description: "Download Facebook videos/reels.", Usage: ".facebook <url>", Execute: cmdGenericYtDlp("Facebook")},
-		{Name: "twitter", Aliases: []string{"x"}, Category: "downloader", Description: "Download Twitter/X videos.", Usage: ".twitter <url>", Execute: cmdGenericYtDlp("Twitter/X")},
-		{Name: "threads", Category: "downloader", Description: "Download Threads videos.", Usage: ".threads <url>", Execute: cmdGenericYtDlp("Threads")},
-		{Name: "douyin", Category: "downloader", Description: "Download Douyin videos.", Usage: ".douyin <url>", Execute: cmdGenericYtDlp("Douyin")},
-		{Name: "capcut", Category: "downloader", Description: "Download CapCut template videos.", Usage: ".capcut <url>", Execute: cmdGenericYtDlp("CapCut")},
-		{Name: "xiaohongshu", Aliases: []string{"xhs"}, Category: "downloader", Description: "Download Xiaohongshu (RedNote) videos.", Usage: ".xiaohongshu <url>", Execute: cmdGenericYtDlp("Xiaohongshu")},
-		{Name: "pixiv", Category: "downloader", Description: "Fetch Pixiv artwork info/preview by ID or URL.", Usage: ".pixiv <id|url>", Execute: cmdPixiv},
-		{Name: "pinterestdownloader", Aliases: []string{"pinterestvideo"}, Category: "downloader", Description: "Download Pinterest video/pin via URL.", Usage: ".pinterestvideo <url>", Execute: cmdGenericYtDlp("Pinterest")},
+		{Name: "downloader", Category: "media", Description: "Universal media downloader for TikTok, IG, FB, Twitter/X, YouTube, CapCut, etc.", Usage: ".downloader <url>", Execute: cmdGenericYtDlp("Media")},
+		{Name: "instagram", Aliases: []string{"ig"}, Category: "media", Description: "Download Instagram Reels/Posts.", Usage: ".instagram <url>", Execute: cmdGenericYtDlp("Instagram")},
+		{Name: "facebook", Aliases: []string{"fb"}, Category: "media", Description: "Download Facebook videos/reels.", Usage: ".facebook <url>", Execute: cmdGenericYtDlp("Facebook")},
+		{Name: "twitter", Aliases: []string{"x"}, Category: "media", Description: "Download Twitter/X videos.", Usage: ".twitter <url>", Execute: cmdGenericYtDlp("Twitter/X")},
+		{Name: "threads", Category: "media", Description: "Download Threads videos.", Usage: ".threads <url>", Execute: cmdGenericYtDlp("Threads")},
+		{Name: "douyin", Category: "media", Description: "Download Douyin videos.", Usage: ".douyin <url>", Execute: cmdGenericYtDlp("Douyin")},
+		{Name: "capcut", Category: "media", Description: "Download CapCut template videos.", Usage: ".capcut <url>", Execute: cmdGenericYtDlp("CapCut")},
+		{Name: "xiaohongshu", Aliases: []string{"xhs"}, Category: "media", Description: "Download Xiaohongshu (RedNote) videos.", Usage: ".xiaohongshu <url>", Execute: cmdGenericYtDlp("Xiaohongshu")},
+		{Name: "pixiv", Category: "media", Description: "Fetch Pixiv artwork info/preview by ID or URL.", Usage: ".pixiv <id|url>", Execute: cmdPixiv},
+		{Name: "pinterestdownloader", Aliases: []string{"pinterestvideo"}, Category: "media", Description: "Download Pinterest video/pin via URL.", Usage: ".pinterestvideo <url>", Execute: cmdGenericYtDlp("Pinterest")},
 
 		// File host / paste / Minecraft tools
-		{Name: "mediafire", Category: "downloader", Description: "Download file from a public MediaFire link.", Usage: ".mediafire <url>", Execute: cmdMediaFire},
-		{Name: "gdrive", Category: "downloader", Description: "Download file from a public Google Drive link.", Usage: ".gdrive <url>", Execute: cmdGDrive},
-		{Name: "pixeldrain", Category: "downloader", Description: "Download file from a PixelDrain link or ID.", Usage: ".pixeldrain <url|id>", Execute: cmdPixelDrain},
-		{Name: "gofile", Category: "downloader", Description: "Inspect or fetch public Gofile link.", Usage: ".gofile <url>", Execute: cmdGofile},
-		{Name: "pastebin", Category: "downloader", Description: "Fetch raw text from a Pastebin URL or ID.", Usage: ".pastebin <url|id>", Execute: cmdPastebin},
-		{Name: "gist", Category: "downloader", Description: "Fetch files from a GitHub Gist URL or ID.", Usage: ".gist <url|id>", Execute: cmdGist},
-		{Name: "minecraft", Category: "downloader", Description: "Check Minecraft server status or player skin. Usage: .minecraft <server_ip|skin username>", Execute: cmdMinecraft},
+		{Name: "mediafire", Category: "media", Description: "Download file from a public MediaFire link.", Usage: ".mediafire <url>", Execute: cmdMediaFire},
+		{Name: "gdrive", Category: "media", Description: "Download file from a public Google Drive link.", Usage: ".gdrive <url>", Execute: cmdGDrive},
+		{Name: "pixeldrain", Category: "media", Description: "Download file from a PixelDrain link or ID.", Usage: ".pixeldrain <url|id>", Execute: cmdPixelDrain},
+		{Name: "gofile", Category: "media", Description: "Inspect or fetch public Gofile link.", Usage: ".gofile <url>", Execute: cmdGofile},
+		{Name: "pastebin", Category: "media", Description: "Fetch raw text from a Pastebin URL or ID.", Usage: ".pastebin <url|id>", Execute: cmdPastebin},
+		{Name: "gist", Category: "media", Description: "Fetch files from a GitHub Gist URL or ID.", Usage: ".gist <url|id>", Execute: cmdGist},
+		{Name: "minecraft", Category: "media", Description: "Check Minecraft server status or player skin. Usage: .minecraft <server_ip|skin username>", Execute: cmdMinecraft},
 
 		// YouTube & Music extensions
-		{Name: "youtube", Category: "youtube", Description: "Download YouTube video. Usage: .youtube <url|query>", Execute: cmdYouTubeVideo},
-		{Name: "ytsearch", Aliases: []string{"ytmusicsearch"}, Category: "youtube", Description: "Search YouTube / YouTube Music tracks.", Usage: ".ytsearch <query>", Execute: cmdYtSearch},
-		{Name: "ytthumb", Category: "youtube", Description: "Download HD thumbnail of a YouTube video.", Usage: ".ytthumb <url>", Execute: cmdYtThumb},
-		{Name: "ytclip", Category: "youtube", Description: "Clip a YouTube video segment. Usage: .ytclip <url> <start_sec> <end_sec>", Execute: cmdYtClip},
-		{Name: "ytsub", Category: "youtube", Description: "Fetch YouTube subtitles/transcript.", Usage: ".ytsub <url>", Execute: cmdYtSub},
-		{Name: "ytmusic", Aliases: []string{"play2", "playdownloader", "album"}, Category: "music", Description: "Search and download music track as MP3.", Usage: ".ytmusic <song name or URL>", Execute: cmdMusicPlay},
-		{Name: "spotify", Category: "music", Description: "Resolve a Spotify track URL/query and download matching audio.", Usage: ".spotify <spotify_url or song>", Execute: cmdSpotify},
+		{Name: "youtube", Category: "media", Description: "Download YouTube video. Usage: .youtube <url|query>", Execute: cmdYouTubeVideo},
+		{Name: "ytsearch", Aliases: []string{"ytmusicsearch"}, Category: "media", Description: "Search YouTube / YouTube Music tracks.", Usage: ".ytsearch <query>", Execute: cmdYtSearch},
+		{Name: "ytthumb", Category: "media", Description: "Download HD thumbnail of a YouTube video.", Usage: ".ytthumb <url>", Execute: cmdYtThumb},
+		{Name: "ytclip", Category: "media", Description: "Clip a YouTube video segment. Usage: .ytclip <url> <start_sec> <end_sec>", Execute: cmdYtClip},
+		{Name: "ytsub", Category: "media", Description: "Fetch YouTube subtitles/transcript.", Usage: ".ytsub <url>", Execute: cmdYtSub},
+		{Name: "ytmusic", Aliases: []string{"play2", "playdownloader", "album"}, Category: "media", Description: "Search and download music track as MP3.", Usage: ".ytmusic <song name or URL>", Execute: cmdMusicPlay},
+		{Name: "spotify", Category: "media", Description: "Resolve a Spotify track URL/query and download matching audio.", Usage: ".spotify <spotify_url or song>", Execute: cmdSpotify},
 	}
 	for _, c := range cmds {
 		handlers.RegisterCommand(c)

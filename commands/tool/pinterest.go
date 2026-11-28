@@ -35,14 +35,9 @@ var (
 func init() {
 	handlers.RegisterCommand(types.Command{
 		Name:        "pinterest",
-		Description: "Search Pinterest images or download media from a Pinterest link.",
-		Category:    "search",
-		Execute:     executePinterest,
-	})
-	handlers.RegisterCommand(types.Command{
-		Name:        "pin",
-		Description: "Alias for /pinterest.",
-		Category:    "search",
+		Aliases:     []string{"pin"},
+		Description: "Search Pinterest images or download from a Pinterest link.",
+		Category:    "tools",
 		Execute:     executePinterest,
 	})
 	handlers.RegisterInteractiveSessionHandler(handlePinterestInteraction)

@@ -24,28 +24,28 @@ import (
 func init() {
 	cmds := []types.Command{
 		// Animanga database & schedule
-		{Name: "anilist", Category: "animanga", Description: "Search anime/manga on AniList. Usage: .anilist <title>", Execute: cmdAniList},
-		{Name: "myanimelist", Aliases: []string{"mal", "anime"}, Category: "animanga", Description: "Search anime on MyAnimeList (Jikan). Usage: .mal <title>", Execute: cmdMAL},
-		{Name: "character", Category: "animanga", Description: "Search an anime character on MyAnimeList. Usage: .character <name>", Execute: cmdCharacter},
-		{Name: "jadwalanime", Category: "animanga", Description: "Show anime airing schedule. Usage: .jadwalanime [monday..sunday]", Execute: cmdJadwalAnime},
-		{Name: "whatanime", Category: "animanga", Description: "Identify anime from a replied screenshot (alias for /traceanime).", Execute: cmdWhatAnimeAlias},
+		{Name: "anilist", Category: "anime", Description: "Search anime/manga on AniList. Usage: .anilist <title>", Execute: cmdAniList},
+		{Name: "myanimelist", Aliases: []string{"mal", "anime"}, Category: "anime", Description: "Search anime on MyAnimeList (Jikan). Usage: .mal <title>", Execute: cmdMAL},
+		{Name: "character", Category: "anime", Description: "Search an anime character on MyAnimeList. Usage: .character <name>", Execute: cmdCharacter},
+		{Name: "jadwalanime", Category: "anime", Description: "Show anime airing schedule. Usage: .jadwalanime [monday..sunday]", Execute: cmdJadwalAnime},
+		{Name: "whatanime", Category: "anime", Description: "Identify anime from a replied screenshot (alias for /traceanime).", Execute: cmdWhatAnimeAlias},
 
 		// Indonesian anime & manga site lookups
-		{Name: "komiku", Aliases: []string{"kiryuu", "westmanga", "bacakomik"}, Category: "animanga", Description: "Search Indonesian manga sources (MangaDex / Komiku).", Usage: ".komiku <title>", Execute: cmdMangaSearch},
-		{Name: "samehadaku", Aliases: []string{"otakudesu", "kuronime", "animasu", "sokuja", "alqanime", "kuramanime"}, Category: "animanga", Description: "Search Indonesian anime info & airing details.", Usage: ".samehadaku <title>", Execute: cmdMAL},
+		{Name: "komiku", Aliases: []string{"kiryuu", "westmanga", "bacakomik"}, Category: "anime", Description: "Search Indonesian manga sources (MangaDex / Komiku).", Usage: ".komiku <title>", Execute: cmdMangaSearch},
+		{Name: "samehadaku", Aliases: []string{"otakudesu", "kuronime", "animasu", "sokuja", "alqanime", "kuramanime"}, Category: "anime", Description: "Search Indonesian anime info & airing details.", Usage: ".samehadaku <title>", Execute: cmdMAL},
 
 		// Waifu & anime art gallery (multi-provider fallback: nekos.best -> nekosia.cat -> safebooru -> konachan -> danbooru)
-		{Name: "waifu", Category: "waifu", Description: "Fetch a random SFW waifu image.", Execute: cmdAnimeGallery("Waifu", "waifu", "cute", "1girl")},
-		{Name: "neko", Category: "waifu", Description: "Fetch a random SFW neko image.", Execute: cmdAnimeGallery("Neko", "neko", "catgirl", "cat_ears")},
-		{Name: "kitsune", Category: "waifu", Description: "Fetch a random kitsune image.", Execute: cmdAnimeGallery("Kitsune", "kitsune", "foxgirl", "fox_ears")},
-		{Name: "husbu", Category: "waifu", Description: "Fetch a random husbando image.", Execute: cmdAnimeGallery("Husbando", "husbando", "", "1boy")},
-		{Name: "maid", Category: "waifu", Description: "Fetch a random anime maid image.", Execute: cmdAnimeGallery("Maid", "", "maid", "maid")},
-		{Name: "bunnygirl", Category: "waifu", Description: "Fetch a random SFW bunnygirl anime art.", Execute: cmdAnimeGallery("Bunny Girl", "", "", "bunny_girl")},
-		{Name: "schoolgirl", Category: "waifu", Description: "Fetch a random SFW schoolgirl anime art.", Execute: cmdAnimeGallery("School Girl", "", "uniform", "school_uniform")},
-		{Name: "swimsuit", Category: "waifu", Description: "Fetch a random SFW swimsuit anime art.", Execute: cmdAnimeGallery("Swimsuit", "", "", "swimsuit")},
-		{Name: "animewallpaper", Category: "waifu", Description: "Fetch an HD anime wallpaper.", Execute: cmdAnimeGallery("Anime Wallpaper", "", "", "scenery")},
-		{Name: "danbooru", Category: "waifu", Description: "Search SFW anime art on Danbooru/Safebooru by tag. Usage: .danbooru <tag>", Execute: cmdDanbooruSearch},
-		{Name: "zerochan", Category: "waifu", Description: "Search anime art by character/tag.", Usage: ".zerochan <tag>", Execute: cmdDanbooruSearch},
+		{Name: "waifu", Category: "anime", Description: "Fetch a random SFW waifu image.", Execute: cmdAnimeGallery("Waifu", "waifu", "cute", "1girl")},
+		{Name: "neko", Category: "anime", Description: "Fetch a random SFW neko image.", Execute: cmdAnimeGallery("Neko", "neko", "catgirl", "cat_ears")},
+		{Name: "kitsune", Category: "anime", Description: "Fetch a random kitsune image.", Execute: cmdAnimeGallery("Kitsune", "kitsune", "foxgirl", "fox_ears")},
+		{Name: "husbu", Category: "anime", Description: "Fetch a random husbando image.", Execute: cmdAnimeGallery("Husbando", "husbando", "", "1boy")},
+		{Name: "maid", Category: "anime", Description: "Fetch a random anime maid image.", Execute: cmdAnimeGallery("Maid", "", "maid", "maid")},
+		{Name: "bunnygirl", Category: "anime", Description: "Fetch a random SFW bunnygirl anime art.", Execute: cmdAnimeGallery("Bunny Girl", "", "", "bunny_girl")},
+		{Name: "schoolgirl", Category: "anime", Description: "Fetch a random SFW schoolgirl anime art.", Execute: cmdAnimeGallery("School Girl", "", "uniform", "school_uniform")},
+		{Name: "swimsuit", Category: "anime", Description: "Fetch a random SFW swimsuit anime art.", Execute: cmdAnimeGallery("Swimsuit", "", "", "swimsuit")},
+		{Name: "animewallpaper", Category: "anime", Description: "Fetch an HD anime wallpaper.", Execute: cmdAnimeGallery("Anime Wallpaper", "", "", "scenery")},
+		{Name: "danbooru", Category: "anime", Description: "Search SFW anime art on Danbooru/Safebooru by tag. Usage: .danbooru <tag>", Execute: cmdDanbooruSearch},
+		{Name: "zerochan", Category: "anime", Description: "Search anime art by character/tag.", Usage: ".zerochan <tag>", Execute: cmdDanbooruSearch},
 	}
 	for _, c := range cmds {
 		handlers.RegisterCommand(c)

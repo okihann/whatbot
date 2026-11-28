@@ -12,13 +12,13 @@ func TestJadiBotAndAllBotCommandsAreLockedToOwner(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected command %q to be registered", name)
 		}
-		if !cmd.OwnerOnly {
-			t.Fatalf("expected %q to have OwnerOnly=true (locked)", name)
+		if !cmd.OwnerOnly || cmd.Category != "owner" {
+			t.Fatalf("expected %q to have OwnerOnly=true and Category='owner', got owner=%v cat=%q", name, cmd.OwnerOnly, cmd.Category)
 		}
 	}
 	for _, cmd := range handlers.PrimaryCommands {
-		if cmd.Category == "bot" && !cmd.OwnerOnly {
-			t.Fatalf("expected all 'bot' category commands to have OwnerOnly=true, but %q has OwnerOnly=false", cmd.Name)
+		if cmd.Category == "owner" && !cmd.OwnerOnly {
+			t.Fatalf("expected all 'owner' category commands to have OwnerOnly=true, but %q has OwnerOnly=false", cmd.Name)
 		}
 	}
 }

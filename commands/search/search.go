@@ -19,10 +19,10 @@ import (
 
 func init() {
 	cmds := []types.Command{
-		{Name: "google", Category: "search", Description: "Search the web (DuckDuckGo / Wikipedia fallback). Usage: .google <query>", Execute: cmdGoogle},
-		{Name: "jadwalsholat", Category: "search", Description: "Get daily Islamic prayer times for a city. Usage: .jadwalsholat Jakarta", Execute: cmdJadwalSholat},
-		{Name: "lyric", Aliases: []string{"lyrics", "lirik"}, Category: "search", Description: "Search song lyrics via LRCLIB. Usage: .lyric <song name>", Execute: cmdLyric},
-		{Name: "wallhaven", Category: "search", Description: "Search HD wallpapers on Wallhaven. Usage: .wallhaven <query>", Execute: cmdWallhaven},
+		{Name: "google", Category: "tools", Description: "Search the web (DuckDuckGo / Wikipedia fallback). Usage: .google <query>", Execute: cmdGoogle},
+		{Name: "jadwalsholat", Category: "tools", Description: "Get daily Islamic prayer times for a city. Usage: .jadwalsholat Jakarta", Execute: cmdJadwalSholat},
+		{Name: "lyric", Aliases: []string{"lyrics", "lirik"}, Category: "tools", Description: "Search song lyrics via LRCLIB. Usage: .lyric <song name>", Execute: cmdLyric},
+		{Name: "wallhaven", Category: "tools", Description: "Search HD wallpapers on Wallhaven. Usage: .wallhaven <query>", Execute: cmdWallhaven},
 	}
 	for _, c := range cmds {
 		handlers.RegisterCommand(c)

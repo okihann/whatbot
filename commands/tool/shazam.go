@@ -19,13 +19,8 @@ import (
 func init() {
 	handlers.RegisterCommand(types.Command{
 		Name:        "shazam",
-		Description: "Identifies a song from a replied-to audio or video clip.",
-		Category:    "media",
-		Execute:     executeShazam,
-	})
-	handlers.RegisterCommand(types.Command{
-		Name:        "sz",
-		Description: "Alias for /shazam.",
+		Aliases:     []string{"sz"},
+		Description: "Identify a song from a replied audio or video clip.",
 		Category:    "media",
 		Execute:     executeShazam,
 	})

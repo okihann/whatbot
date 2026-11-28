@@ -38,19 +38,19 @@ func init() {
 	handlers.RegisterInteractiveSessionHandler(handleMiniReply)
 
 	cmds := []types.Command{
-		{Name: "minigame", Category: "minigame", Description: "Open the NopeBot Web Arcade hub (12 playable HTML5 games + in-chat boards).", Execute: cmdArcade("snake")},
-		{Name: "2048", Category: "minigame", Description: "Play 2048 right in chat (reply w/a/s/d) or in the Web Arcade!", Execute: cmd2048},
-		{Name: "minesweeper", Category: "minigame", Description: "Play 5x5 Minesweeper in chat (reply row,col like 2,3) or Web Arcade!", Execute: cmdMinesweeper},
-		{Name: "sudoku", Category: "minigame", Description: "Play Sudoku in the Web Arcade.", Execute: cmdArcade("sudoku")},
-		{Name: "snake", Category: "minigame", Description: "Play Snake in the Web Arcade.", Execute: cmdArcade("snake")},
-		{Name: "tetris", Category: "minigame", Description: "Play Tetris in the Web Arcade.", Execute: cmdArcade("tetris")},
-		{Name: "flappybird", Category: "minigame", Description: "Play Flappy Bird in the Web Arcade.", Execute: cmdArcade("flappybird")},
-		{Name: "breakout", Category: "minigame", Description: "Play Breakout in the Web Arcade.", Execute: cmdArcade("breakout")},
-		{Name: "dinorun", Category: "minigame", Description: "Play Dino Run in the Web Arcade.", Execute: cmdArcade("dinorun")},
-		{Name: "frogger", Category: "minigame", Description: "Play Frogger in the Web Arcade.", Execute: cmdArcade("frogger")},
-		{Name: "galaga", Category: "minigame", Description: "Play Galaga in the Web Arcade.", Execute: cmdArcade("galaga")},
-		{Name: "pacman", Category: "minigame", Description: "Play Pacman in the Web Arcade.", Execute: cmdArcade("pacman")},
-		{Name: "racing", Category: "minigame", Description: "Play Racing in the Web Arcade.", Execute: cmdArcade("racing")},
+		{Name: "minigame", Category: "games", Description: "Open the NopeBot Web Arcade hub (12 playable HTML5 games + in-chat boards).", Execute: cmdArcade("snake")},
+		{Name: "2048", Category: "games", Description: "Play 2048 right in chat (reply w/a/s/d) or in the Web Arcade!", Execute: cmd2048},
+		{Name: "minesweeper", Category: "games", Description: "Play 5x5 Minesweeper in chat (reply row,col like 2,3) or Web Arcade!", Execute: cmdMinesweeper},
+		{Name: "sudoku", Category: "games", Description: "Play Sudoku in the Web Arcade.", Execute: cmdArcade("sudoku")},
+		{Name: "snake", Category: "games", Description: "Play Snake in the Web Arcade.", Execute: cmdArcade("snake")},
+		{Name: "tetris", Category: "games", Description: "Play Tetris in the Web Arcade.", Execute: cmdArcade("tetris")},
+		{Name: "flappybird", Category: "games", Description: "Play Flappy Bird in the Web Arcade.", Execute: cmdArcade("flappybird")},
+		{Name: "breakout", Category: "games", Description: "Play Breakout in the Web Arcade.", Execute: cmdArcade("breakout")},
+		{Name: "dinorun", Category: "games", Description: "Play Dino Run in the Web Arcade.", Execute: cmdArcade("dinorun")},
+		{Name: "frogger", Category: "games", Description: "Play Frogger in the Web Arcade.", Execute: cmdArcade("frogger")},
+		{Name: "galaga", Category: "games", Description: "Play Galaga in the Web Arcade.", Execute: cmdArcade("galaga")},
+		{Name: "pacman", Category: "games", Description: "Play Pacman in the Web Arcade.", Execute: cmdArcade("pacman")},
+		{Name: "racing", Category: "games", Description: "Play Racing in the Web Arcade.", Execute: cmdArcade("racing")},
 	}
 	for _, c := range cmds {
 		handlers.RegisterCommand(c)

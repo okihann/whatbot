@@ -25,26 +25,16 @@ const inlineVideoMaxBytes = 16 * 1024 * 1024 // 16 MB safe inline video limit; l
 func init() {
 	handlers.RegisterCommand(types.Command{
 		Name:        "ytmp4",
+		Aliases:     []string{"yt"},
 		Description: "Search or download a YouTube video as MP4.",
-		Category:    "downloader",
-		Execute:     executeYtmp4,
-	})
-	handlers.RegisterCommand(types.Command{
-		Name:        "yt",
-		Description: "Alias for /ytmp4.",
-		Category:    "downloader",
+		Category:    "media",
 		Execute:     executeYtmp4,
 	})
 	handlers.RegisterCommand(types.Command{
 		Name:        "ytmp3",
+		Aliases:     []string{"play"},
 		Description: "Search or download YouTube audio as MP3.",
-		Category:    "downloader",
-		Execute:     executeYtmp3,
-	})
-	handlers.RegisterCommand(types.Command{
-		Name:        "play",
-		Description: "Alias for /ytmp3.",
-		Category:    "downloader",
+		Category:    "media",
 		Execute:     executeYtmp3,
 	})
 

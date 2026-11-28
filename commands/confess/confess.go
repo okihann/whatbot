@@ -30,12 +30,12 @@ func init() {
 	handlers.RegisterInteractiveSessionHandler(handleDirectConfessReply)
 
 	cmds := []types.Command{
-		{Name: "confess", Aliases: []string{"menfess", "fess"}, Category: "confess", Description: "Send an anonymous confession via DM. Usage: .confess <phone> | <message> [| alias]", Execute: cmdConfess},
-		{Name: "balasconfess", Aliases: []string{"replyconfess", "balasfess"}, Category: "confess", Description: "Reply anonymously to a confession thread. Usage: .balasconfess <CF-XXXX> <reply>", Execute: cmdBalasConfess},
-		{Name: "stopconfess", Aliases: []string{"closeconfess"}, Category: "confess", Description: "Close an active confession thread. Usage: .stopconfess <CF-XXXX>", Execute: cmdStopConfess},
-		{Name: "blockconfess", Category: "confess", Description: "Anonymously block the sender of a confession thread. Usage: .blockconfess <CF-XXXX>", Execute: cmdBlockConfess},
-		{Name: "confessmode", Category: "confess", Description: "Enable or disable receiving anonymous confessions. Usage: .confessmode on|off", Execute: cmdConfessMode},
-		{Name: "confessinbox", Category: "confess", Description: "List your recent anonymous confession threads.", Execute: cmdConfessInbox},
+		{Name: "confess", Aliases: []string{"menfess", "fess"}, Category: "general", Description: "Send an anonymous confession via DM. Usage: .confess <phone> | <message> [| alias]", Execute: cmdConfess},
+		{Name: "balasconfess", Aliases: []string{"replyconfess", "balasfess"}, Category: "general", Description: "Reply anonymously to a confession thread. Usage: .balasconfess <CF-XXXX> <reply>", Execute: cmdBalasConfess},
+		{Name: "stopconfess", Aliases: []string{"closeconfess"}, Category: "general", Description: "Close an active confession thread. Usage: .stopconfess <CF-XXXX>", Execute: cmdStopConfess},
+		{Name: "blockconfess", Category: "general", Description: "Anonymously block the sender of a confession thread. Usage: .blockconfess <CF-XXXX>", Execute: cmdBlockConfess},
+		{Name: "confessmode", Category: "general", Description: "Enable or disable receiving anonymous confessions. Usage: .confessmode on|off", Execute: cmdConfessMode},
+		{Name: "confessinbox", Category: "general", Description: "List your recent anonymous confession threads.", Execute: cmdConfessInbox},
 	}
 	for _, c := range cmds {
 		handlers.RegisterCommand(c)

@@ -33,28 +33,28 @@ func init() {
 	handlers.RegisterGroupParticipantHandler(handleAntiKudetaAndBot)
 
 	cmds := []types.Command{
-		{Name: "antilink", Category: "group_security", GroupOnly: true, AdminOnly: true, Description: "Block links in group. Usage: .antilink on|off|delete|warn|kick", Execute: cmdAntiLink},
-		{Name: "antimedia", Category: "group_security", GroupOnly: true, AdminOnly: true, Description: "Delete media sent by non-admins. Usage: .antimedia on|off", Execute: cmdToggleSec("antimedia")},
-		{Name: "antibot", Category: "group_security", GroupOnly: true, AdminOnly: true, Description: "Toggle AntiBot guard. Usage: .antibot on|off", Execute: cmdToggleSec("antibot")},
-		{Name: "antikudeta", Category: "group_security", GroupOnly: true, AdminOnly: true, Description: "Auto-demote mass-demoters in the group. Usage: .antikudeta on|off", Execute: cmdToggleSec("antikudeta")},
-		{Name: "badword", Category: "group_security", GroupOnly: true, AdminOnly: true, Description: "Manage group badword filter. Usage: .badword on|off|add <word>|del <word>|list", Execute: cmdBadWord},
+		{Name: "antilink", Category: "group", GroupOnly: true, AdminOnly: true, Description: "Block links in group. Usage: .antilink on|off|delete|warn|kick", Execute: cmdAntiLink},
+		{Name: "antimedia", Category: "group", GroupOnly: true, AdminOnly: true, Description: "Delete media sent by non-admins. Usage: .antimedia on|off", Execute: cmdToggleSec("antimedia")},
+		{Name: "antibot", Category: "group", GroupOnly: true, AdminOnly: true, Description: "Toggle AntiBot guard. Usage: .antibot on|off", Execute: cmdToggleSec("antibot")},
+		{Name: "antikudeta", Category: "group", GroupOnly: true, AdminOnly: true, Description: "Auto-demote mass-demoters in the group. Usage: .antikudeta on|off", Execute: cmdToggleSec("antikudeta")},
+		{Name: "badword", Category: "group", GroupOnly: true, AdminOnly: true, Description: "Manage group badword filter. Usage: .badword on|off|add <word>|del <word>|list", Execute: cmdBadWord},
 
-		{Name: "warn", Category: "group_security", GroupOnly: true, AdminOnly: true, Description: "Warn a member (auto-kicks at warn limit). Usage: .warn @user [reason]", Execute: cmdWarn},
-		{Name: "warnings", Category: "group_security", GroupOnly: true, Description: "Check warnings for yourself or a mentioned member.", Execute: cmdWarnings},
-		{Name: "listwarning", Category: "group_security", GroupOnly: true, AdminOnly: true, Description: "List all warned members in this group.", Execute: cmdListWarning},
-		{Name: "resetwarn", Category: "group_security", GroupOnly: true, AdminOnly: true, Description: "Reset warnings for a member. Usage: .resetwarn @user", Execute: cmdResetWarn},
+		{Name: "warn", Category: "group", GroupOnly: true, AdminOnly: true, Description: "Warn a member (auto-kicks at warn limit). Usage: .warn @user [reason]", Execute: cmdWarn},
+		{Name: "warnings", Category: "group", GroupOnly: true, Description: "Check warnings for yourself or a mentioned member.", Execute: cmdWarnings},
+		{Name: "listwarning", Category: "group", GroupOnly: true, AdminOnly: true, Description: "List all warned members in this group.", Execute: cmdListWarning},
+		{Name: "resetwarn", Category: "group", GroupOnly: true, AdminOnly: true, Description: "Reset warnings for a member. Usage: .resetwarn @user", Execute: cmdResetWarn},
 
-		{Name: "mutemember", Category: "group_security", GroupOnly: true, AdminOnly: true, BotAdmin: true, Description: "Mute a member (auto-deletes their messages). Usage: .mutemember @user [minutes]", Execute: cmdMuteMember},
-		{Name: "unmutemember", Category: "group_security", GroupOnly: true, AdminOnly: true, Description: "Unmute a member. Usage: .unmutemember @user", Execute: cmdUnmuteMember},
-		{Name: "listmute", Category: "group_security", GroupOnly: true, AdminOnly: true, Description: "List currently muted members in this group.", Execute: cmdListMute},
+		{Name: "mutemember", Category: "group", GroupOnly: true, AdminOnly: true, BotAdmin: true, Description: "Mute a member (auto-deletes their messages). Usage: .mutemember @user [minutes]", Execute: cmdMuteMember},
+		{Name: "unmutemember", Category: "group", GroupOnly: true, AdminOnly: true, Description: "Unmute a member. Usage: .unmutemember @user", Execute: cmdUnmuteMember},
+		{Name: "listmute", Category: "group", GroupOnly: true, AdminOnly: true, Description: "List currently muted members in this group.", Execute: cmdListMute},
 
-		{Name: "banmember", Category: "group_security", GroupOnly: true, AdminOnly: true, BotAdmin: true, Description: "Ban and kick a member from this group. Usage: .banmember @user", Execute: cmdBanMember(true)},
-		{Name: "unbanmember", Category: "group_security", GroupOnly: true, AdminOnly: true, Description: "Unban a member in this group. Usage: .unbanmember <phone>", Execute: cmdBanMember(false)},
-		{Name: "listbanmember", Category: "group_security", GroupOnly: true, AdminOnly: true, Description: "List banned members in this group.", Execute: cmdListBanMember},
+		{Name: "banmember", Category: "group", GroupOnly: true, AdminOnly: true, BotAdmin: true, Description: "Ban and kick a member from this group. Usage: .banmember @user", Execute: cmdBanMember(true)},
+		{Name: "unbanmember", Category: "group", GroupOnly: true, AdminOnly: true, Description: "Unban a member in this group. Usage: .unbanmember <phone>", Execute: cmdBanMember(false)},
+		{Name: "listbanmember", Category: "group", GroupOnly: true, AdminOnly: true, Description: "List banned members in this group.", Execute: cmdListBanMember},
 
-		{Name: "banchat", Category: "group_security", GroupOnly: true, OwnerOnly: true, Description: "Mute bot responses in this group.", Execute: cmdBanChat(true)},
-		{Name: "unbanchat", Category: "group_security", GroupOnly: true, OwnerOnly: true, Description: "Re-enable bot responses in this group.", Execute: cmdBanChat(false)},
-		{Name: "banlist", Category: "group_security", OwnerOnly: true, Description: "List all banned groups.", Execute: cmdBanList},
+		{Name: "banchat", Category: "owner", GroupOnly: true, OwnerOnly: true, Description: "Mute bot responses in this group.", Execute: cmdBanChat(true)},
+		{Name: "unbanchat", Category: "owner", GroupOnly: true, OwnerOnly: true, Description: "Re-enable bot responses in this group.", Execute: cmdBanChat(false)},
+		{Name: "banlist", Category: "owner", OwnerOnly: true, Description: "List all banned groups.", Execute: cmdBanList},
 	}
 	for _, c := range cmds {
 		handlers.RegisterCommand(c)

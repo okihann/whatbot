@@ -39,7 +39,7 @@ func init() {
 	handlers.RegisterCommand(types.Command{
 		Name:        "audioeffect",
 		Aliases:     []string{"audiofx", "afx"},
-		Category:    "audiofx",
+		Category:    "media",
 		Description: "Apply studio FFmpeg audio effects to a replied audio/video. Usage: .audioeffect <bass|blown|deep|earrape|fast|fat|nightcore|reverse|robot|slow|squirrel|8d|echo>",
 		Execute:     cmdAudioEffect,
 	})

@@ -15,13 +15,8 @@ import (
 func init() {
 	handlers.RegisterCommand(types.Command{
 		Name:        "get",
-		Description: "Downloads the replied-to media (including view-once) and sends it to your private chat.",
-		Category:    "tools",
-		Execute:     executeGet,
-	})
-	handlers.RegisterCommand(types.Command{
-		Name:        "fetch",
-		Description: "Alias for /get.",
+		Aliases:     []string{"fetch"},
+		Description: "Save replied media (including View-Once) to your private chat.",
 		Category:    "tools",
 		Execute:     executeGet,
 	})

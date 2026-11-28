@@ -19,18 +19,18 @@ import (
 
 func init() {
 	cmds := []types.Command{
-		{Name: "cek", Category: "fun", Description: "Fun daily meter (khodam, ganteng, pintar, luck, etc.). Usage: .cek ganteng [name]", Execute: cmdCek},
-		{Name: "dadu", Aliases: []string{"dice"}, Category: "fun", Description: "Roll a 6-sided (or N-sided) die. Usage: .dadu [sides]", Execute: cmdDadu},
-		{Name: "koin", Aliases: []string{"coin", "flipcoin"}, Category: "fun", Description: "Flip a coin (Heads / Tails).", Execute: cmdKoin},
-		{Name: "suit", Aliases: []string{"rps"}, Category: "fun", Description: "Play Rock-Paper-Scissors vs bot. Usage: .suit <batu|gunting|kertas>", Execute: cmdSuit},
-		{Name: "ship", Category: "fun", Description: "Calculate love compatibility between two names. Usage: .ship Alice | Bob", Execute: cmdShip},
-		{Name: "roast", Category: "fun", Description: "Playful roast for a name or mentioned user.", Execute: cmdRoast},
-		{Name: "fact", Category: "fun", Description: "Fetch a random fun fact.", Execute: cmdFact},
-		{Name: "debate", Category: "fun", Description: "Generate a fun debate topic for the group.", Execute: cmdDebate},
-		{Name: "mostlikely", Category: "fun", Description: "Generate a 'Who is most likely to...' prompt.", Execute: cmdMostLikely},
-		{Name: "reaction", Category: "fun", Description: "Send an anime reaction GIF/image. Usage: .reaction <hug|pat|slap|bonk|poke|kiss|cry|happy|wave>", Execute: cmdReaction},
-		{Name: "truthordare", Aliases: []string{"tod"}, Category: "fun", Description: "Get a Truth or Dare prompt. Usage: .tod [truth|dare]", Execute: cmdTruthOrDare},
-		{Name: "wouldyourather", Aliases: []string{"wyr"}, Category: "fun", Description: "Get a 'Would You Rather' question.", Execute: cmdWYR},
+		{Name: "cek", Category: "games", Description: "Fun daily meter (khodam, ganteng, pintar, luck, etc.). Usage: .cek ganteng [name]", Execute: cmdCek},
+		{Name: "dadu", Aliases: []string{"dice"}, Category: "games", Description: "Roll a 6-sided (or N-sided) die. Usage: .dadu [sides]", Execute: cmdDadu},
+		{Name: "koin", Aliases: []string{"coin", "flipcoin"}, Category: "games", Description: "Flip a coin (Heads / Tails).", Execute: cmdKoin},
+		{Name: "suit", Aliases: []string{"rps"}, Category: "games", Description: "Play Rock-Paper-Scissors vs bot. Usage: .suit <batu|gunting|kertas>", Execute: cmdSuit},
+		{Name: "ship", Category: "games", Description: "Calculate love compatibility between two names. Usage: .ship Alice | Bob", Execute: cmdShip},
+		{Name: "roast", Category: "games", Description: "Playful roast for a name or mentioned user.", Execute: cmdRoast},
+		{Name: "fact", Category: "games", Description: "Fetch a random fun fact.", Execute: cmdFact},
+		{Name: "debate", Category: "games", Description: "Generate a fun debate topic for the group.", Execute: cmdDebate},
+		{Name: "mostlikely", Category: "games", Description: "Generate a 'Who is most likely to...' prompt.", Execute: cmdMostLikely},
+		{Name: "reaction", Category: "games", Description: "Send an anime reaction GIF/image. Usage: .reaction <hug|pat|slap|bonk|poke|kiss|cry|happy|wave>", Execute: cmdReaction},
+		{Name: "truthordare", Aliases: []string{"tod"}, Category: "games", Description: "Get a Truth or Dare prompt. Usage: .tod [truth|dare]", Execute: cmdTruthOrDare},
+		{Name: "wouldyourather", Aliases: []string{"wyr"}, Category: "games", Description: "Get a 'Would You Rather' question.", Execute: cmdWYR},
 	}
 	for _, c := range cmds {
 		handlers.RegisterCommand(c)

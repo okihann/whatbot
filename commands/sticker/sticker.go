@@ -29,12 +29,12 @@ import (
 
 func init() {
 	cmds := []types.Command{
-		{Name: "qc", Category: "sticker", Description: "Generate a WhatsApp quote-bubble sticker. Usage: .qc <text> (or reply to a message)", Execute: cmdQC},
-		{Name: "emojimix", Category: "sticker", Description: "Combine two emojis using Google Emoji Kitchen. Usage: .emojimix 😂+🔥", Execute: cmdEmojiMix},
-		{Name: "getexif", Category: "sticker", Description: "Inspect EXIF pack/author metadata of a replied sticker.", Execute: cmdGetEXIF},
-		{Name: "toimage", Aliases: []string{"toimg"}, Category: "sticker", Description: "Convert a replied WebP sticker into a PNG image.", Execute: cmdToImage},
-		{Name: "togif", Aliases: []string{"tovideo", "tovid"}, Category: "sticker", Description: "Convert a replied animated WebP sticker into MP4 video.", Execute: cmdToVideo},
-		{Name: "linesticker", Aliases: []string{"downloadstickerpack", "stickerly", "sigstick", "stickersgg", "fstik"}, Category: "sticker", Description: "Download stickers from a public LINE Store / Sticker pack URL.", Usage: ".linesticker <store_url>", Execute: cmdStickerPack},
+		{Name: "qc", Category: "media", Description: "Generate a WhatsApp quote-bubble sticker. Usage: .qc <text> (or reply to a message)", Execute: cmdQC},
+		{Name: "emojimix", Category: "media", Description: "Combine two emojis using Google Emoji Kitchen. Usage: .emojimix 😂+🔥", Execute: cmdEmojiMix},
+		{Name: "getexif", Category: "media", Description: "Inspect EXIF pack/author metadata of a replied sticker.", Execute: cmdGetEXIF},
+		{Name: "toimage", Aliases: []string{"toimg"}, Category: "media", Description: "Convert a replied WebP sticker into a PNG image.", Execute: cmdToImage},
+		{Name: "togif", Aliases: []string{"tovideo", "tovid"}, Category: "media", Description: "Convert a replied animated WebP sticker into MP4 video.", Execute: cmdToVideo},
+		{Name: "linesticker", Aliases: []string{"downloadstickerpack", "stickerly", "sigstick", "stickersgg", "fstik"}, Category: "media", Description: "Download stickers from a public LINE Store / Sticker pack URL.", Usage: ".linesticker <store_url>", Execute: cmdStickerPack},
 	}
 	for _, c := range cmds {
 		handlers.RegisterCommand(c)

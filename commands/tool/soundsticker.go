@@ -44,34 +44,13 @@ var (
 )
 
 func init() {
-	for _, cmd := range []types.Command{
-		{
-			Name:        "soundsticker",
-			Description: "Creates a WhatsApp Sound Sticker from a video with audio, or by combining a photo/sticker/video with an audio/voice note.",
-			Category:    "media",
-			Execute:     executeSoundSticker,
-		},
-		{
-			Name:        "asticker",
-			Description: "Alias for /soundsticker.",
-			Category:    "media",
-			Execute:     executeSoundSticker,
-		},
-		{
-			Name:        "sstick",
-			Description: "Alias for /soundsticker.",
-			Category:    "media",
-			Execute:     executeSoundSticker,
-		},
-		{
-			Name:        "sa",
-			Description: "Alias for /soundsticker.",
-			Category:    "media",
-			Execute:     executeSoundSticker,
-		},
-	} {
-		handlers.RegisterCommand(cmd)
-	}
+	handlers.RegisterCommand(types.Command{
+		Name:        "soundsticker",
+		Aliases:     []string{"asticker", "sstick", "sa"},
+		Description: "Create a Sound Sticker from video with audio, or image + voice note.",
+		Category:    "media",
+		Execute:     executeSoundSticker,
+	})
 	handlers.RegisterInteractiveSessionHandler(handleSoundStickerReply)
 }
 
