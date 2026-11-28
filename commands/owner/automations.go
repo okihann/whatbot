@@ -27,7 +27,7 @@ func init() {
 	})
 	handlers.RegisterCommand(types.Command{
 		Name:        "auto-get",
-		Description: "Automatically saves view-once and DM media from targets to your private chat. (Owner only)",
+		Description: "Automatically saves view-once media from targets to your private chat. (Owner only)",
 		Category:    "owner",
 		Execute:     executeAutoGet,
 	})
@@ -309,18 +309,21 @@ func HandleAutomations(client *whatsmeow.Client, msg *events.Message) {
 	}
 
 	// 4. Direct Auto-Get:
-	//    - Always capture view-once media in BOTH DMs and Groups when targeted.
-	//    - Capture regular media in DMs (excluding broadcasts/status and self).
+	//    - Only capture view-once media (in both DMs and Groups) when targeted;
+	//      regular DM media and stickers are ignored.
 	if autoConf.AutoGetOn && !msg.Info.IsFromMe && msg.Info.Chat.Server != waTypes.BroadcastServer {
-		shouldCapture := isViewOnce || !msg.Info.IsGroup
-		if shouldCapture && utils.IsMediaMessage(coreMsg) {
+		if shouldAutoGetMedia(coreMsg, isViewOnce) {
 			senderNum := utils.ResolvePhoneNumber(client, msg.Info.Sender, msg.Info.SenderAlt)
 			if isTargeted(autoConf.AutoGetTargets, senderNum) && utils.DefaultMessageCache.TryMarkAutoGet(botID, msg.Info.ID) {
 				chatLabel := resolveChatLabel(client, msg.Info)
-				go processAutoGet(client, botID, msg.Info.ID, coreMsg, ownerJID, senderNum, chatLabel, isViewOnce)
+				go processAutoGet(client, botID, msg.Info.ID, coreMsg, ownerJID, senderNum, chatLabel, true)
 			}
 		}
 	}
+}
+
+func shouldAutoGetMedia(coreMsg *waE2E.Message, isViewOnce bool) bool {
+	return isViewOnce && utils.IsMediaMessage(coreMsg)
 }
 
 func precacheViewOnceMedia(client *whatsmeow.Client, botID, msgID string, coreMsg *waE2E.Message) {
@@ -455,7 +458,13 @@ func handleQuotedAutomation(
 		StoredAt:   time.Now(),
 	})
 
-	if !autoConf.AutoGetOn || !utils.IsMediaMessage(quotedCore) {
+	if !quotedIsViewOnce {
+		if cached, ok := utils.DefaultMessageCache.Get(botID, quotedID); ok && cached != nil && cached.IsViewOnce {
+			quotedIsViewOnce = true
+		}
+	}
+
+	if !autoConf.AutoGetOn || !shouldAutoGetMedia(quotedCore, quotedIsViewOnce) {
 		return
 	}
 

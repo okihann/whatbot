@@ -49,3 +49,30 @@ func TestIsRevokeMessage(t *testing.T) {
 		t.Fatalf("normal message should not be detected as revoke")
 	}
 }
+
+func TestShouldAutoGetMediaViewOnceOnly(t *testing.T) {
+	img := &waE2E.Message{ImageMessage: &waE2E.ImageMessage{}}
+	vid := &waE2E.Message{VideoMessage: &waE2E.VideoMessage{}}
+	aud := &waE2E.Message{AudioMessage: &waE2E.AudioMessage{}}
+	sticker := &waE2E.Message{StickerMessage: &waE2E.StickerMessage{}}
+	text := &waE2E.Message{}
+
+	// Regular DM media and stickers must NOT be captured by auto-get.
+	if shouldAutoGetMedia(img, false) {
+		t.Fatalf("regular image must not trigger auto-get")
+	}
+	if shouldAutoGetMedia(sticker, false) {
+		t.Fatalf("sticker must not trigger auto-get")
+	}
+	if shouldAutoGetMedia(vid, false) {
+		t.Fatalf("regular video must not trigger auto-get")
+	}
+
+	// View-once media MUST be captured.
+	if !shouldAutoGetMedia(img, true) || !shouldAutoGetMedia(vid, true) || !shouldAutoGetMedia(aud, true) {
+		t.Fatalf("view-once image/video/audio must trigger auto-get")
+	}
+	if shouldAutoGetMedia(text, true) {
+		t.Fatalf("non-media message must not trigger auto-get")
+	}
+}
