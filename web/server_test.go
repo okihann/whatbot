@@ -381,3 +381,122 @@ func TestSequentialPairingAndGamesWebRoutes(t *testing.T) {
 		t.Fatalf("expected recorded arcade score 120, got %+v", lb)
 	}
 }
+
+func TestWebSecurityHardening(t *testing.T) {
+	dir := t.TempDir()
+	sessionDB, err := db.OpenSequentialSQLite(filepath.Join(dir, "session.db"))
+	if err != nil {
+		t.Fatalf("OpenSequentialSQLite: %v", err)
+	}
+	defer db.CheckpointAndClose(sessionDB)
+
+	chatStore, err := db.OpenChatStore(filepath.Join(dir, "webchat.db"), filepath.Join(dir, "webmedia"))
+	if err != nil {
+		t.Fatalf("OpenChatStore: %v", err)
+	}
+	defer chatStore.Close()
+
+	botStore, err := db.OpenBotStore(filepath.Join(dir, "botdata.db"))
+	if err != nil {
+		t.Fatalf("OpenBotStore: %v", err)
+	}
+	defer botStore.Close()
+
+	// Save a malicious HTML attachment to verify stored-XSS protection on /api/wa/media/.
+	htmlRel, err := chatStore.SaveMediaFile("628111", "XSS-1", ".html", []byte("<script>alert(1)</script>"))
+	if err != nil {
+		t.Fatalf("SaveMediaFile: %v", err)
+	}
+	chatStore.RecordMessage(db.StoredMessage{
+		AccountID: "628111",
+		MsgID:     "XSS-1",
+		ChatJID:   "628222@s.whatsapp.net",
+		MsgType:   "document",
+		MediaMime: "text/html",
+		MediaPath: htmlRel,
+		Timestamp: 1700000400,
+	})
+	chatStore.Flush()
+
+	hub := NewHub(chatStore, sessionDB, &mockAccountManager{})
+	hub.SetBotStore(botStore)
+	t.Setenv("WEB_PASSWORD", "strongpass999")
+
+	mux := http.NewServeMux()
+	hub.Mount(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// 1. Security headers + CSP on index HTML
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	resp.Body.Close()
+	if resp.Header.Get("X-Content-Type-Options") != "nosniff" ||
+		resp.Header.Get("X-Frame-Options") != "DENY" ||
+		resp.Header.Get("Content-Security-Policy") == "" {
+		t.Fatalf("missing security headers on /: %+v", resp.Header)
+	}
+
+	// 2. Pre-auth /api/wa/auth/me and /api/wa/status hide sensitive metadata
+	resp, _ = http.Get(srv.URL + "/api/wa/auth/me")
+	var mePayload map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&mePayload)
+	resp.Body.Close()
+	if mePayload["ownerHint"] != "" {
+		t.Fatalf("expected empty ownerHint before auth, got %v", mePayload["ownerHint"])
+	}
+
+	resp, _ = http.Get(srv.URL + "/api/wa/status")
+	var stPayload map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&stPayload)
+	resp.Body.Close()
+	if _, leaked := stPayload["sqlite"]; leaked {
+		t.Fatalf("expected sqlite metadata hidden before auth, got %+v", stPayload)
+	}
+
+	// 3. GET /api/wa/auth/logout rejected (405)
+	resp, _ = http.Get(srv.URL + "/api/wa/auth/logout")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 for GET logout, got %d", resp.StatusCode)
+	}
+
+	// 4. Cross-origin POST rejected (403 CSRF check)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/wa/auth/request-code", strings.NewReader(`{"password":"strongpass999"}`))
+	req.Header.Set("Origin", "https://evil.example")
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for cross-origin POST, got %d", resp.StatusCode)
+	}
+
+	// 5. Stored XSS protection on /api/wa/media/ for .html attachment
+	ownerClient := newVerifiedOwnerClient(t, srv.URL, hub, "strongpass999")
+	resp, err = ownerClient.Get(srv.URL + "/api/wa/media/628111/XSS-1")
+	if err != nil {
+		t.Fatalf("GET media XSS-1: %v", err)
+	}
+	resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "application/octet-stream" {
+		t.Fatalf("expected application/octet-stream for html attachment, got %q", ct)
+	}
+	if cd := resp.Header.Get("Content-Disposition"); !strings.HasPrefix(cd, "attachment;") {
+		t.Fatalf("expected attachment Content-Disposition for html attachment, got %q", cd)
+	}
+	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "sandbox") {
+		t.Fatalf("expected sandbox CSP on media response, got %q", csp)
+	}
+
+	// 6. Per-IP rate limiting triggers 429 on repeated request-code calls
+	var lastCode int
+	for i := 0; i < authRequestMaxPerIP+2; i++ {
+		r, _ := http.Post(srv.URL+"/api/wa/auth/request-code", "application/json", strings.NewReader(`{"password":"wrong"}`))
+		lastCode = r.StatusCode
+		r.Body.Close()
+	}
+	if lastCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 after exceeding per-IP auth rate limit, got %d", lastCode)
+	}
+}

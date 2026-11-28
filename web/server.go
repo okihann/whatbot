@@ -32,45 +32,63 @@ var pairHTML []byte
 //go:embed static/games.html
 var gamesHTML []byte
 
+const webHTMLCSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
+func withSecurityHeaders(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+		next(w, r)
+	}
+}
+
 // Mount registers the WhatsApp Web UI, Owner Auth, Sequential QR Pairing Queue, Arcade Games, and REST/SSE API onto mux.
 func (h *Hub) Mount(mux *http.ServeMux) {
-	mux.HandleFunc("/", h.handleIndex)
-	mux.HandleFunc("/pair/", h.handlePairPage)
-	mux.HandleFunc("/games", h.handleGamesPage)
-	mux.HandleFunc("/games/", h.handleGamesPage)
+	mux.HandleFunc("/", withSecurityHeaders(h.handleIndex))
+	mux.HandleFunc("/pair/", withSecurityHeaders(h.handlePairPage))
+	mux.HandleFunc("/games", withSecurityHeaders(h.handleGamesPage))
+	mux.HandleFunc("/games/", withSecurityHeaders(h.handleGamesPage))
 
 	// Owner-Only Authentication & WhatsApp 6-digit Verification endpoints
-	mux.HandleFunc("/api/wa/auth/me", h.handleAuthMe)
-	mux.HandleFunc("/api/wa/auth/request-code", h.handleAuthRequestCode)
-	mux.HandleFunc("/api/wa/auth/verify", h.handleAuthVerify)
-	mux.HandleFunc("/api/wa/auth/logout", h.handleAuthLogout)
+	mux.HandleFunc("/api/wa/auth/me", withSecurityHeaders(h.handleAuthMe))
+	mux.HandleFunc("/api/wa/auth/request-code", withSecurityHeaders(h.handleAuthRequestCode))
+	mux.HandleFunc("/api/wa/auth/verify", withSecurityHeaders(h.handleAuthVerify))
+	mux.HandleFunc("/api/wa/auth/logout", withSecurityHeaders(h.handleAuthLogout))
 
-	mux.HandleFunc("/api/wa/status", h.handleStatus)
-	mux.HandleFunc("/api/wa/accounts", h.requireAuth(h.handleAccounts))
-	mux.HandleFunc("/api/wa/accounts/add", h.requireAuth(h.handleAddAccount))
-	mux.HandleFunc("/api/wa/accounts/remove", h.requireAuth(h.handleRemoveAccount))
-	mux.HandleFunc("/api/wa/qr.png", h.requireAuth(h.handleQRPNG))
-	mux.HandleFunc("/api/wa/pair/", h.handlePublicPairAPI)
-	mux.HandleFunc("/api/wa/pairing/tickets", h.requireAuth(h.handlePairingTickets))
-	mux.HandleFunc("/api/wa/pairing/queue", h.requireAuth(h.handlePairingQueue))
-	mux.HandleFunc("/api/wa/pairing/cancel", h.requireAuth(h.handlePairingCancel))
-	mux.HandleFunc("/api/wa/games/score", h.handleGameScore)
-	mux.HandleFunc("/api/wa/events", h.requireAuth(h.handleSSE))
-	mux.HandleFunc("/api/wa/chats", h.requireAuth(h.handleChats))
-	mux.HandleFunc("/api/wa/chats/read", h.requireAuth(h.handleMarkRead))
-	mux.HandleFunc("/api/wa/contacts", h.requireAuth(h.handleContacts))
-	mux.HandleFunc("/api/wa/avatar", h.requireAuth(h.handleAvatar))
-	mux.HandleFunc("/api/wa/sync", h.requireAuth(h.handleSync))
-	mux.HandleFunc("/api/wa/messages", h.requireAuth(h.handleMessages))
-	mux.HandleFunc("/api/wa/media/", h.requireAuth(h.handleMedia))
-	mux.HandleFunc("/api/wa/send/text", h.requireAuth(h.handleSendText))
-	mux.HandleFunc("/api/wa/send/media", h.requireAuth(h.handleSendMedia))
+	mux.HandleFunc("/api/wa/status", withSecurityHeaders(h.handleStatus))
+	mux.HandleFunc("/api/wa/accounts", withSecurityHeaders(h.requireAuth(h.handleAccounts)))
+	mux.HandleFunc("/api/wa/accounts/add", withSecurityHeaders(h.requireAuth(h.handleAddAccount)))
+	mux.HandleFunc("/api/wa/accounts/remove", withSecurityHeaders(h.requireAuth(h.handleRemoveAccount)))
+	mux.HandleFunc("/api/wa/qr.png", withSecurityHeaders(h.requireAuth(h.handleQRPNG)))
+	mux.HandleFunc("/api/wa/pair/", withSecurityHeaders(h.handlePublicPairAPI))
+	mux.HandleFunc("/api/wa/pairing/tickets", withSecurityHeaders(h.requireAuth(h.handlePairingTickets)))
+	mux.HandleFunc("/api/wa/pairing/queue", withSecurityHeaders(h.requireAuth(h.handlePairingQueue)))
+	mux.HandleFunc("/api/wa/pairing/cancel", withSecurityHeaders(h.requireAuth(h.handlePairingCancel)))
+	mux.HandleFunc("/api/wa/games/score", withSecurityHeaders(h.handleGameScore))
+	mux.HandleFunc("/api/wa/events", withSecurityHeaders(h.requireAuth(h.handleSSE)))
+	mux.HandleFunc("/api/wa/chats", withSecurityHeaders(h.requireAuth(h.handleChats)))
+	mux.HandleFunc("/api/wa/chats/read", withSecurityHeaders(h.requireAuth(h.handleMarkRead)))
+	mux.HandleFunc("/api/wa/contacts", withSecurityHeaders(h.requireAuth(h.handleContacts)))
+	mux.HandleFunc("/api/wa/avatar", withSecurityHeaders(h.requireAuth(h.handleAvatar)))
+	mux.HandleFunc("/api/wa/sync", withSecurityHeaders(h.requireAuth(h.handleSync)))
+	mux.HandleFunc("/api/wa/messages", withSecurityHeaders(h.requireAuth(h.handleMessages)))
+	mux.HandleFunc("/api/wa/media/", withSecurityHeaders(h.requireAuth(h.handleMedia)))
+	mux.HandleFunc("/api/wa/send/text", withSecurityHeaders(h.requireAuth(h.handleSendText)))
+	mux.HandleFunc("/api/wa/send/media", withSecurityHeaders(h.requireAuth(h.handleSendMedia)))
 }
 
 func (h *Hub) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if !checkSameOrigin(r) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			writeJSON(w, map[string]string{"error": "forbidden cross-origin request"})
 			return
 		}
 		if !h.isAuthenticatedRequest(r) {
@@ -89,22 +107,27 @@ func (h *Hub) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", webHTMLCSP)
 	_, _ = w.Write(indexHTML)
 }
 
 func (h *Hub) handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	authed := h.isAuthenticatedRequest(r)
 	resp := map[string]any{
 		"ok":            true,
-		"platform":      "Android Companion (View-Once Ready)",
-		"uptimeSec":     int64(time.Since(h.startedAt).Seconds()),
 		"authRequired":  true,
 		"otpRequired":   webOTPRequired(),
-		"authenticated": h.isAuthenticatedRequest(r),
-		"sqlite": map[string]any{
+		"authenticated": authed,
+	}
+	if authed {
+		resp["platform"] = "Android Companion (View-Once Ready)"
+		resp["uptimeSec"] = int64(time.Since(h.startedAt).Seconds())
+		resp["sqlite"] = map[string]any{
 			"session": db.SQLiteStatus(h.sessionDB),
 			"webchat": h.store.Status(),
-		},
+		}
 	}
 	writeJSON(w, resp)
 }
@@ -386,6 +409,19 @@ func (h *Hub) handleMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"messages": msgs})
 }
 
+func isSafeInlineMediaMIME(rawMIME string) bool {
+	base := strings.ToLower(strings.TrimSpace(strings.Split(rawMIME, ";")[0]))
+	switch base {
+	case "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp", "image/avif",
+		"video/mp4", "video/webm", "video/quicktime",
+		"audio/ogg", "audio/mpeg", "audio/mp4", "audio/webm", "audio/wav", "audio/aac",
+		"application/pdf":
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *Hub) handleMedia(w http.ResponseWriter, r *http.Request) {
 	// URL format: /api/wa/media/{account}/{msgID}
 	rel := strings.TrimPrefix(r.URL.Path, "/api/wa/media/")
@@ -424,8 +460,16 @@ func (h *Hub) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if contentType != "" {
+	// Prevent stored XSS from malicious WhatsApp attachments (e.g. .html, .svg, .js):
+	// only allow safe non-scriptable media inline; force everything else to download.
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	ext := strings.ToLower(filepath.Ext(fullPath))
+	dangerousExt := ext == ".html" || ext == ".htm" || ext == ".xhtml" || ext == ".svg" || ext == ".xml" || ext == ".js" || ext == ".mjs"
+	if !dangerousExt && isSafeInlineMediaMIME(contentType) {
 		w.Header().Set("Content-Type", contentType)
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", utils.SanitizeFilename(filepath.Base(fullPath))))
 	}
 	w.Header().Set("Cache-Control", "private, max-age=86400")
 	http.ServeFile(w, r, fullPath)
@@ -681,11 +725,13 @@ func (h *Hub) handleSendMedia(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) handlePairPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", webHTMLCSP)
 	_, _ = w.Write(pairHTML)
 }
 
 func (h *Hub) handleGamesPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", webHTMLCSP)
 	_, _ = w.Write(gamesHTML)
 }
 

@@ -8,8 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -29,6 +32,10 @@ const (
 	webOTPTTL            = 5 * time.Minute
 	webOTPMaxAttempts    = 5
 	webOTPResendCooldown = 15 * time.Second
+	authRateWindow       = 10 * time.Minute
+	authRequestMaxPerIP  = 5
+	authVerifyMaxPerIP   = 10
+	maxAuthJSONBodyBytes = 16 * 1024
 )
 
 var (
@@ -55,11 +62,13 @@ type webAuth struct {
 	mu              sync.Mutex
 	secret          []byte
 	secretLoaded    bool
+	revokedLoaded   bool
 	pendingCode     string
 	pendingExpiry   time.Time
 	pendingIssuedAt time.Time
 	failedAttempts  int
-	revoked         map[string]time.Time
+	revoked         map[string]int64
+	ipHits          map[string][]time.Time
 }
 
 func newWebAuth() *webAuth {
@@ -67,7 +76,89 @@ func newWebAuth() *webAuth {
 	_, _ = rand.Read(raw)
 	return &webAuth{
 		secret:  raw,
-		revoked: make(map[string]time.Time),
+		revoked: make(map[string]int64),
+		ipHits:  make(map[string][]time.Time),
+	}
+}
+
+func (h *Hub) allowAuthRate(bucket, ip string, limit int, window time.Duration) bool {
+	now := time.Now()
+	cutoff := now.Add(-window)
+	key := bucket + "|" + ip
+
+	h.auth.mu.Lock()
+	defer h.auth.mu.Unlock()
+
+	if h.auth.ipHits == nil {
+		h.auth.ipHits = make(map[string][]time.Time)
+	}
+	// Periodically prune stale buckets to keep memory bounded.
+	if len(h.auth.ipHits) > 512 {
+		for k, times := range h.auth.ipHits {
+			kept := times[:0]
+			for _, ts := range times {
+				if ts.After(cutoff) {
+					kept = append(kept, ts)
+				}
+			}
+			if len(kept) == 0 {
+				delete(h.auth.ipHits, k)
+			} else {
+				h.auth.ipHits[k] = kept
+			}
+		}
+	}
+
+	hits := h.auth.ipHits[key]
+	kept := hits[:0]
+	for _, ts := range hits {
+		if ts.After(cutoff) {
+			kept = append(kept, ts)
+		}
+	}
+	if len(kept) >= limit {
+		h.auth.ipHits[key] = kept
+		return false
+	}
+	h.auth.ipHits[key] = append(kept, now)
+	return true
+}
+
+func (h *Hub) loadRevokedLocked() {
+	if h.auth.revokedLoaded {
+		return
+	}
+	h.auth.revokedLoaded = true
+	bs := h.getBotStore()
+	if bs == nil {
+		return
+	}
+	val, ok, err := bs.GetKV("web_auth_revoked")
+	if err != nil || !ok || val == "" {
+		return
+	}
+	var loaded map[string]int64
+	if err := json.Unmarshal([]byte(val), &loaded); err == nil {
+		now := time.Now().Unix()
+		for sid, exp := range loaded {
+			if exp > now {
+				h.auth.revoked[sid] = exp
+			}
+		}
+	}
+}
+
+func (h *Hub) persistRevokedLocked() {
+	now := time.Now().Unix()
+	for sid, exp := range h.auth.revoked {
+		if exp <= now {
+			delete(h.auth.revoked, sid)
+		}
+	}
+	if bs := h.getBotStore(); bs != nil {
+		if raw, err := json.Marshal(h.auth.revoked); err == nil {
+			_ = bs.SetKV("web_auth_revoked", string(raw))
+		}
 	}
 }
 
@@ -119,32 +210,50 @@ func (h *Hub) signSessionToken(sid string, exp int64) string {
 	return payload + "." + hex.EncodeToString(mac.Sum(nil))
 }
 
-func (h *Hub) verifySessionToken(tok string) (string, bool) {
+func (h *Hub) verifySessionToken(tok string) (string, int64, bool) {
 	parts := strings.Split(tok, ".")
 	if len(parts) != 3 {
-		return "", false
+		return "", 0, false
 	}
 	sid, expStr := parts[0], parts[1]
 	exp, err := strconv.ParseInt(expStr, 10, 64)
 	if err != nil || time.Now().Unix() > exp {
-		return "", false
+		return "", 0, false
 	}
 	expected := h.signSessionToken(sid, exp)
 	if subtle.ConstantTimeCompare([]byte(tok), []byte(expected)) != 1 {
-		return "", false
+		return "", 0, false
 	}
 	h.auth.mu.Lock()
 	defer h.auth.mu.Unlock()
+	h.loadRevokedLocked()
 	if _, rev := h.auth.revoked[sid]; rev {
-		return "", false
+		return "", 0, false
 	}
-	return sid, true
+	return sid, exp, true
+}
+
+// checkSameOrigin enforces basic CSRF protection on mutating requests when a
+// browser sends an Origin header, ensuring it matches the target Host.
+func checkSameOrigin(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+		return true
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, r.Host)
 }
 
 func (h *Hub) isAuthenticatedRequest(r *http.Request) bool {
 	// 1. Verified owner session cookie (primary auth path).
 	if c, err := r.Cookie(webSessionCookieName); err == nil && c.Value != "" {
-		if _, ok := h.verifySessionToken(c.Value); ok {
+		if _, _, ok := h.verifySessionToken(c.Value); ok {
 			return true
 		}
 	}
@@ -274,10 +383,14 @@ func (h *Hub) checkOptionalPassword(provided string) bool {
 func (h *Hub) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	authed := h.isAuthenticatedRequest(r)
 	cli := h.connectedPrimaryClient()
-	_, ownerHint := resolveOwnerTargetJID(cli)
+	ownerHint := ""
+	if authed {
+		_, ownerHint = resolveOwnerTargetJID(cli)
+	}
 	writeJSON(w, map[string]any{
-		"authenticated":     h.isAuthenticatedRequest(r),
+		"authenticated":     authed,
 		"passwordRequired":  webPassword() != "",
 		"otpRequired":       webOTPRequired(),
 		"whatsappConnected": cli != nil,
@@ -290,13 +403,23 @@ func (h *Hub) handleAuthRequestCode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !checkSameOrigin(r) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+
+	if !h.allowAuthRate("req", rateLimitIP(r), authRequestMaxPerIP, authRateWindow) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		writeJSON(w, map[string]string{"error": "too many verification code requests — try again later"})
+		return
+	}
 
 	var req struct {
 		Password string `json:"password"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	_ = json.NewDecoder(io.LimitReader(r.Body, maxAuthJSONBodyBytes)).Decode(&req)
 
 	if !h.checkOptionalPassword(req.Password) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -351,14 +474,24 @@ func (h *Hub) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !checkSameOrigin(r) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+
+	if !h.allowAuthRate("verify", rateLimitIP(r), authVerifyMaxPerIP, authRateWindow) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		writeJSON(w, map[string]string{"error": "too many login attempts — try again later"})
+		return
+	}
 
 	var req struct {
 		Password string `json:"password"`
 		Code     string `json:"code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxAuthJSONBodyBytes)).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		writeJSON(w, map[string]string{"error": "invalid json"})
 		return
@@ -400,10 +533,20 @@ func (h *Hub) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !checkSameOrigin(r) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
 	if c, err := r.Cookie(webSessionCookieName); err == nil && c.Value != "" {
-		if sid, ok := h.verifySessionToken(c.Value); ok {
+		if sid, exp, ok := h.verifySessionToken(c.Value); ok {
 			h.auth.mu.Lock()
-			h.auth.revoked[sid] = time.Now()
+			h.loadRevokedLocked()
+			h.auth.revoked[sid] = exp
+			h.persistRevokedLocked()
 			h.auth.mu.Unlock()
 		}
 	}
@@ -414,9 +557,24 @@ func (h *Hub) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
 	})
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func rateLimitIP(r *http.Request) string {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("TRUST_PROXY")), "true") {
+		if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+			return strings.TrimSpace(strings.Split(xff, ",")[0])
+		}
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil && host != "" {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }
 
 func clientIP(r *http.Request) string {
